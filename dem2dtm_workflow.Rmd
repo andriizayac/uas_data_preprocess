@@ -1,0 +1,285 @@
+---
+title: "DEM2DTM workflow"
+author: "Andrii Zaiats"
+date: "Last updated: 2022-08-31"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(include = TRUE, echo = TRUE, eval = FALSE)
+```
+
+```{R, results='hide'}
+# helper function
+merge_tiles <- function(file_path, output_path) {
+  # merge multiple laz/las tiles into a single large file
+  # input: a path to where the tiles are, 
+  # input: a path, including the name without extension, where the merged file will go 
+  # output: a single .las file
+  
+  pkgs <- library("lidR", logical.return = TRUE, quietly = TRUE)
+  if( pkgs == FALSE ) {
+    stop(cat("Package `lidR` is not available"))
+  }
+  ctg <- readLAScatalog(file_path)
+  
+  opt_output_files(ctg) <- output_path
+  opt_chunk_buffer(ctg) <- 0
+  opt_chunk_size(ctg) <- 1e6
+  singlefile_ctg <- catalog_retile(ctg)
+  
+  rm(ctg, singlefile_ctg)
+  
+}
+```
+
+#### DEM to DTM workflow for SfM dense clouds using R and CloudCompare.
+
+The following code is a test version of the workflow and may undergo changes/improvements. Known issues include: (a) from one step in CloudCompare to the next, the number of tiles may be reduced due to the really tiny tiles representing the edges, or (b) if the following code chunk that calls CloudCompare is ran before the current process finishes in the background. [working on resolution]
+
+##### *Steps in the workflow:*
+
+1.  Split dense point cloud into smaller tiles (as an option, you can choose to process the entire file).
+
+2.  Select a few tiles for test runs and parameter tuning (optional).
+
+3.  Use CloudCompare (CC) to clean DEM down to "*ground points*" only:
+
+    -   Apply SOR filter to remove outliers;\
+    -   Apply CSF algorithm to remove large vegetation chunks;\
+    -   Apply SOR filter to remove outliers;\
+    -   Calculate Normal Rate change (*e.i.*, curvature): large neighborhood;\
+    -   Calculate Normal Rate change (*e.i.*, curvature): small neighborhood;\
+    -   Calculate Normals;\
+    -   Merge tiles into a single *.las* file;\
+    -   Fit Poisson surface and filter points by distance to mesh;\
+    -   Calculate Normals;\
+    -   Generate final DTM surface.
+
+4.  Generate DTM raster.
+
+5.  Generate CHM (optionally).
+
+##### *Required software*
+
+-   R packages: *lidR, future, raster, sf, mapview, mapedit, raster*.
+
+-   CloudCompare version 2.12+
+
+A good practice would be to create a separate folder for each dense cloud to be processed. For example, the following structure would work:
+
+> *Project folder*:\
+> \|- *denseCloud.las*\
+> \|- *dem.tif*\
+> \|- *tiles* [empty folder]\
+> \|- *test* [empty folder]
+
+Setting up the environment: first we load the R packages, then provide system paths to the input file(s) and where the output should be stored. The three paths are: (1) path to the location of the dense cloud [*Project folder* above], (2) path to the *tiles* folder, and (3) path to the *test* folder.
+
+```{r, results='hide', message=FALSE}
+pkgs <- c("lidR", "future", "raster", "sf", "mapview", "mapedit", "terra")
+sapply(pkgs, require, character.only = TRUE, quietly = TRUE)
+
+path_prj <- "D:/Andrii/20220520_CorralsTrail/products_ownCloud/"
+path_tiles <- paste0(path_prj, "tiles/")
+path_test <- paste0(path_prj, "test/")
+```
+
+*A note on coordinate reference systems:* Nowhere in this code we apply CRS transformations. The output DTM raster will be in the same CRS as the input dense cloud. The dense cloud needs to be in a projected CRS (*e.g.*, wgs84utm11N) so that the *x, y, z* are all on the same scale.
+
+#### 1. Split dense point cloud into smaller tiles.
+
+*The workflow assumes we have a single .las file output from the SfM software. However,\
+- if you have a collection of .laz/.las files that need to be merged first (default WebODM output) before processing or tiling, scroll down to the end of the script and run the merge function first.\
+- If you already have a collection of tiles in a .las format and want to process them separately, move them to the **tiles** folder and move to **Step 3***.
+
+We can adjust the tile size using the `opt_chunk_size()` function as necessary. In case our input *.las* file is small enough to be processed as a single file, we can just specify the tile size really large (beyond the footprint of the dense cloud) and proceed with the workflow (in this case we can skip **Step 2**). On the other hand, if the file is large, this step may take a few minutes and the rest of the code will process each tile separately.
+
+```{r}
+file <- list.files(path_prj, pattern = "\\.las$", full.names = TRUE)
+las = readLAScatalog(file) # here 'file' should be a single  DenseCloud, otherwise prompts an error
+
+opt_chunk_buffer(las) <- 0 # units [meters]
+opt_chunk_size(las) <- 1e10 # units [meters]
+opt_output_files(las) <- paste0(path_tiles, "tile_{ID}")
+
+library(future)
+plan(multisession) # parallelize
+
+tic <- Sys.time()
+tiles = catalog_retile(las) # creates another catalog object and saves tiles on disc as well
+toc <- tic - Sys.time()
+
+plan(sequential) # close parallel setup
+```
+
+#### 2. Select a few tiles for test runs and parameter tuning.
+
+Feel free to skip this step if you know the parameters for CloudCompare filtering. Otherwise, this step may be handy and save time if you are about to process a large dataset. To run the workflow on a subset of tiles, in ***Step 3.1*** instead of using `path_tiles` that contains your full data set, use `path_test`, which contains a subset of tiles you select here.
+
+```{r, message=FALSE}
+tiles <- readLAScatalog(path_tiles) 
+ts <- catalog_select(tiles)
+opt_output_files(ts) <- paste0(path_test, "tile_{ID}")
+opt_chunk_buffer(ts) <- 0
+opt_chunk_size(ts) <- 10
+newts <- catalog_retile(ts)
+```
+
+#### 3. Use CloudCompare to clean DEM down to "*ground points*".
+
+*For most of Step 3 the script runs CloudCompare commands via Command Line Interface (CLI).* *note: while the script in each chunk may indicate that the program has finished after we ran it, it may actually still run in the background for a while. Running the next step before the previous has finished may cause the loss of tiles.*
+
+##### 3.1: Denoise using SOR filter, *e.g.,* [-SOR 200 4]
+
+```{r}
+path <- path_test # (change between test and full dataset paths)
+wdir <- gsub("/", "\\\\", path) # specify where the tiles are 
+
+# CloudCompare command
+cmd <- paste0("FOR %f IN (", wdir, "*.las) DO \"C:/Program Files/CloudCompare/cloudcompare.exe\" -SILENT -O -GLOBAL_SHIFT AUTO %f -AUTO_SAVE OFF -SOR 200 4 -NO_TIMESTAMP -C_EXPORT_FMT BIN -SAVE_CLOUDS")
+
+system("cmd.exe", input = cmd, show.output.on.console = FALSE)
+```
+
+##### 3.2: Apply CSF for initial separation of Ground and Vegetation, *e.g.,* [-CSF -SCENES SLOPE -CLOTH_RESOLUTION 0.1 -MAX_ITERATION 500 -CLASS_THRESHOLD 0.2 -EXPORT_GROUND]
+
+*note: the CloudCompare CSF function is new and may be unstable when ran from CLI - the output may be placed in unexpected directory on a hard drive. The following chunk includes a line to search for the output and place it back into the project working directory, but providing an approximate path where files are stored, `search_dir` will speed it up. It'd be best to provide a search directory, if the search runs on the entire hard drive it will take a long time and may accidentally grab unrelated files.*
+
+```{r}
+# CloudCompare command
+cmd <- paste0("FOR %f IN (", wdir, "*.las) DO \"C:/Program Files/CloudCompare/cloudcompare.exe\" -SILENT -O -GLOBAL_SHIFT AUTO %f -AUTO_SAVE OFF -CSF -SCENES SLOPE -CLOTH_RESOLUTION 0.1 -MAX_ITERATION 500 -CLASS_THRESHOLD 0.2 -EXPORT_GROUND -NO_TIMESTAMP -C_EXPORT_FMT BIN")
+
+system("cmd.exe", input = cmd, show.output.on.console = FALSE)
+
+search_dir <- "D:/Andrii"
+
+lf <- list.files(search_dir, pattern = "tile.*_ground_points.bin", recursive=TRUE, full.names=TRUE)
+
+# this loop ensures that we move ground points only when CSF command finshed running in the background
+while(length(lf) < length(list.files(path, pattern = ".las$"))) {
+  Sys.sleep(10)
+  
+  lf <- list.files(search_dir, pattern = "tile.*_ground_points.bin", recursive=TRUE, full.names=TRUE)
+} 
+
+lfnew <- paste0(path, sapply(strsplit(lf, "/"), function(x) { x[length(x)]})) 
+file.rename(lf, lfnew)
+```
+
+##### 3.3: Denoise again using SOR filter, *e.g.,* [-SOR 100 2].
+
+```{r}
+# CloudCompare command
+cmd <- paste0("FOR %f IN (", wdir, "*_ground_points.bin) DO \"C:/Program Files/CloudCompare/cloudcompare.exe\" -SILENT -O -GLOBAL_SHIFT AUTO %f -AUTO_SAVE OFF -SOR 100 2 -NO_TIMESTAMP -C_EXPORT_FMT BIN -SAVE_CLOUDS")
+
+system("cmd.exe", input = cmd, show.output.on.console = FALSE)
+```
+
+##### 3.4: Calculate Normal Change Rate (*i.e.*, curvature) at larger neighborhoods, *e.g.,* [-CURV NORMAL_CHANGE 0.25].
+
+```{r}
+# CloudCompare command
+cmd <- paste0("FOR %f IN (", wdir, "*_ground_points_SOR.bin) DO \"C:/Program Files/CloudCompare/cloudcompare.exe\" -SILENT -O -GLOBAL_SHIFT AUTO %f -AUTO_SAVE OFF -CURV NORMAL_CHANGE 0.25 -NO_TIMESTAMP -C_EXPORT_FMT BIN -SAVE_CLOUDS")
+
+system("cmd.exe", input = cmd, show.output.on.console = FALSE)
+```
+
+##### 3.5: Filter DenseCloud based on calculated curvatures at some threshold, *e.g.,* [-FILTER_SF MIN 0.015].
+
+```{r}
+# CloudCompare command
+cmd <- paste0("FOR %f IN (", wdir, "*_ground_points_SOR.bin) DO \"C:/Program Files/CloudCompare/cloudcompare.exe\" -SILENT -O -GLOBAL_SHIFT AUTO %f -AUTO_SAVE OFF -FILTER_SF MIN 0.010 -NO_TIMESTAMP -C_EXPORT_FMT BIN -SAVE_CLOUDS")
+
+system("cmd.exe", input = cmd, show.output.on.console = FALSE)
+```
+
+##### 3.6: Calculate Normal Change Rate at smaller neighborhoods, *e.g.,* [-CURV NORMAL_CHANGE 0.05].
+
+```{r}
+# CloudCompare command
+cmd <- paste0("FOR %f IN (", wdir, "*_SOR_FILTERED_*.bin) DO \"C:/Program Files/CloudCompare/cloudcompare.exe\" -SILENT -O -GLOBAL_SHIFT AUTO %f -AUTO_SAVE OFF -CURV NORMAL_CHANGE 0.25 -NO_TIMESTAMP -C_EXPORT_FMT BIN -SAVE_CLOUDS")
+
+system("cmd.exe", input = cmd, show.output.on.console = FALSE)
+```
+
+##### 3.7: Filter the cloud based on the calculated curvatures at some threshold, *e.g.,* [-FILTER_SF MIN 0.05].
+
+```{r}
+# CloudCompare command
+cmd <- paste0("FOR %f IN (", wdir, "*_SOR_FILTERED_*.bin) DO \"C:/Program Files/CloudCompare/cloudcompare.exe\" -SILENT -O -GLOBAL_SHIFT AUTO %f -AUTO_SAVE OFF -FILTER_SF MIN 0.1 -NO_TIMESTAMP -C_EXPORT_FMT LAS -SAVE_CLOUDS")
+
+system("cmd.exe", input = cmd, show.output.on.console = FALSE)
+```
+
+##### 3.8: Merge the final ground tiles.
+
+```{r, results='hide'}
+# first remove all intermediate products .bin
+lf <- list.files(path, full.names = TRUE)
+file.remove(lf[grepl(".*.bin$", lf)])
+
+# temporary create a copy of the final .las files 
+lf <- list.files(path, pattern = "\\].las$", full.names = TRUE)
+
+dir.create(paste0(path, "tmp"), showWarnings = FALSE)
+file.copy(lf, gsub("/tile", "/tmp/tile", lf))
+
+# merge the final ground tiles
+merge_tiles(paste0(path, "tmp"), paste0(path_prj, "merge_ground"))
+# delete temporary directory
+unlink(paste0(path, "tmp"), recursive = TRUE)
+```
+
+##### 3.9 Run the last filters on the merged cloud and export ground point cloud. [This step is currently not automated] You will need to open CloudCompare GUI, import the merged file, and follow these steps:
+
+-   Highlight the cloud, then `Plugins –> PoissonRecon –> [Resolution: 0.5] [Advanced: boundary - Neumann; sample per node - 1.5; point weight - 2.0]`
+
+-   Filter by distance to mesh: highlight the mesh AND the cloud, then `Tools --> Distances --> Cloud/Mesh --> [default settings -> Compute -> OK]`. Then highlight only the cloud and `Edit --> Scalar fields --> Filter by Value --> [Range: -0.05 0.02]`
+
+-   Calculate Normals: highlight the extracted cloud, then `Edit --> Normals --> Compute --> [Quadric auto +Z]`
+
+-   Generate final surface: highlight the extracted cloud, then `Plugins --> PoissonRecon --> [Resolution: 0.3] [Advanced: boundary - Neumann; sample per node - 1.5; point weight - 2.0]`
+
+-   Clip the resultant mesh: highlight mesh, then `Tools --> Segmentation --> CrossSection` Adjust the bounding box and click on *Export selection as a new entity*. Press Escape to exit the interactive segment tool.
+
+-   Sample points on the surface: highlight the segmented mesh, then `Edit --> Mesh --> SamplePoints` , select `Density = 1000` and uncheck the boxes. Highlight the output, then `File --> Save` and name the ground point cloud following `{site}*{dtm_cloud}*{wgs84utm11n}.tif` and save into the project folder.
+
+> If we're running the script on a subset of tiles, this may be a good stopping point. Explore how the output surface looks like and whether the filtered point cloud does not include any excessively large gaps that may result in concave/convex interpolation. If the output looks fine, we can go back to **Step 3.1** and change the path to `path_tiles` that includes the full dataset.
+
+#### 4. Generate DTM raster.
+
+Import and highlight the ground point cloud generated from the previous step, then click `Tools --> Projection --> Rasterize`, set `resolution=0.01, direction=Z, cell_height=average, Fill_with=interpolate` --\> `Update grid -> Raster -> check Export Height` and save as .tif file following the name convention `{site}*{dtm}*{wgs84utm11n}.tif` and save into the project.
+
+#### 5. Generate CHM (optionally).
+
+```{r, results='hide', warning=FALSE, warning=TRUE}
+f <- list.files(path_prj, pattern = "^dsm.tif$", recursive = TRUE, full.names = TRUE)[1]
+dem <- rast(f)
+
+f <- list.files(path_prj, pattern = "_dtm_.*.tif$", recursive = TRUE, full.names = TRUE)[1]
+dtm <- rast(f)
+
+dem <- crop(dem, ext(dtm))
+dtm <- resample(dtm, dem)
+
+chm <- dem - dtm
+
+cat('The output CHM model contains: ', sum(is.na(values(chm))),'NA values')
+
+writeRaster(chm, file = paste0(path_prj, "CorralsTrail_20220520_chm_wgs84utm11n.tif"))
+```
+
+------------------------------------------------------------------------
+
+#### Merge WebODM output.
+
+This code chunk may be useful if you have hundreds of .laz/.las files that need to be merged before processing. For example, the default WebODM output includes a stack of .laz files that vary in size and point density. These chunks need to be merged first to obtain the dense cloud.
+
+```{r}
+path_odm_chunks <- "D:/Andrii/20220520_CorralsTrail/products_ownCloud/20220520_Corrals/products/mavic_rgb_products/rgb_1-Highlands-5-20-2022-all/entwine_pointcloud/ept-data/"
+
+file_name <- "CorralsTrail_20220520_denseCloud_wgs84utm11n"
+
+merge_tiles(path_odm_chunks, paste0(path_prj, file_name))
+```
