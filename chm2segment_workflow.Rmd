@@ -1,0 +1,39 @@
+---
+title: "CHM2Segment workflow"
+author: "Andrii Zaiats"
+date: "Last updated: 2022-09-06"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(include = TRUE, echo = TRUE, eval = FALSE)
+```
+
+#### Canopy Height Model (CHM) to segmented crowns workflow using _lidR_ package.\
+
+The script goes step by step from the canopy height model to a final product that is a geospatial layer of segmented crowns. The following code is a test version of the workflow and may undergo changes/improvements.\
+
+##### *Steps in the workflow:*
+
+##### *Required software*
+
+-   R packages: *lidR, future, sf, terra, stars, tidyverse, *.
+
+Setting up the environment: first we load the R packages, then provide system paths to the input file(s) and where the output should be stored. The three paths are: (1) path to the location of the dense cloud [*Project folder* above], (2) path to the *tiles* folder, and (3) path to the *test* folder. Lastly, we can specify site name, date of data collection, and CRS for consistent naming convention.
+
+```{r, results='hide', message=FALSE}
+# load packages
+pkgs <- c("lidR", "raster", "gstat", "sf", "sp", "viridisLite", "stars", "dplyr")
+sapply(pkgs, require, character.only = TRUE, quietly = TRUE)
+
+
+# specify paths
+path_prj <- "D:/Andrii/20220524_NorthHam/"
+path_tiles <- paste0(path_prj, "tiles/")
+path_test <- paste0(path_prj, "test/")
+
+
+# data attributes
+site <- "NorthHam"
+date <- "20220524" # in YYYYMMDD format
+prj_crs <- "wgs84utm11N"
+```

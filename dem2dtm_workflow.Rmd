@@ -84,7 +84,7 @@ prj_crs <- "wgs84utm11N"
 
 We can adjust the tile size using the `opt_chunk_size()` function as necessary. In case our input *.las* file is small enough to be processed as a single file, we can just specify the tile size really large (beyond the footprint of the dense cloud) and proceed with the workflow (in this case we can skip **Step 2**). On the other hand, if the file is large, this step may take a few minutes and the rest of the code will process each tile separately.
 
-```{r}
+```{r, message=FALSE}
 file <- list.files(path_prj, pattern = "\\.las$", full.names = TRUE)
 las = readLAScatalog(file) # here 'file' should be a single  DenseCloud, otherwise prompts an error
 
@@ -113,7 +113,7 @@ tiles <- readLAScatalog(path_tiles)
 ts <- catalog_select(tiles)
 opt_output_files(ts) <- paste0(path_test, "tile_{ID}")
 opt_chunk_buffer(ts) <- 0
-opt_chunk_size(ts) <- 10
+opt_chunk_size(ts) <- tile_size # same as the tile size
 newts <- catalog_retile(ts)
 ```
 
@@ -126,7 +126,7 @@ newts <- catalog_retile(ts)
 This step runs a command to clean the point cloud from outliers. SOR (Statistical Outlier Filter) takes in two arguments: (1) number of neighbors (specifies a radius to search for outliers), and (2) the number of standard deviations as a measure distance from the mean to create a threshold for point removal. Larger values in (1) will take longer to run but will be more stable to noise in the cloud, and smaller values in (2) will set more aggressive threshold.
 
 ```{r}
-path <- path_test # (change between test and full dataset paths)
+path <- path_tiles # (change between test and full dataset paths)
 wdir <- gsub("/", "\\\\", path) # specify where the tiles are 
 
 # CloudCompare command
@@ -143,11 +143,11 @@ This step runs a command to separate ground from vegetation objects. The objecti
 
 ```{r}
 # CloudCompare command
-cmd <- paste0("FOR %f IN (", wdir, "*.las) DO \"C:/Program Files/CloudCompare/cloudcompare.exe\" -SILENT -O -GLOBAL_SHIFT AUTO %f -AUTO_SAVE OFF -CSF -SCENES SLOPE -CLOTH_RESOLUTION 0.1 -MAX_ITERATION 500 -CLASS_THRESHOLD 0.2 -EXPORT_GROUND -NO_TIMESTAMP -C_EXPORT_FMT BIN")
+cmd <- paste0("FOR %f IN (", wdir, "*.las) DO \"C:/Program Files/CloudCompare/cloudcompare.exe\" -SILENT -O -GLOBAL_SHIFT AUTO %f -AUTO_SAVE OFF -CSF -SCENES FLAT -CLOTH_RESOLUTION 0.1 -MAX_ITERATION 500 -CLASS_THRESHOLD 0.1 -EXPORT_GROUND -NO_TIMESTAMP -C_EXPORT_FMT BIN")
 
 system("cmd.exe", input = cmd, show.output.on.console = FALSE)
 
-search_dir <- "D:/Andrii"
+search_dir <- "D:/"
 
 lf <- list.files(search_dir, pattern = "tile.*_ground_points.bin", recursive=TRUE, full.names=TRUE)
 
@@ -182,40 +182,40 @@ cmd <- paste0("FOR %f IN (", wdir, "*_ground_points_SOR.bin) DO \"C:/Program Fil
 system("cmd.exe", input = cmd, show.output.on.console = FALSE)
 ```
 
-##### 3.5: Filter DenseCloud based on calculated curvatures at some threshold, *e.g.,* [-FILTER_SF MIN 0.015].
+##### 3.5: Filter DenseCloud based on calculated curvatures at some threshold, *e.g.,* [-FILTER_SF MIN 0.01].
 
 This step filters out points that are above the specified curvature value. Higher values will result in retaining more points, while smaller values will remove points more aggressively. Setting the filter value too low may result in a dense cloud with large gaps, which will make surface reconstruction more difficult and likely less accurate when interpolating underneath the shrub canopies. Best to use CloudCompare GUI to fine-tune the threshold for a point cloud at hand.
 
 ```{r}
 # CloudCompare command
-cmd <- paste0("FOR %f IN (", wdir, "*_ground_points_SOR.bin) DO \"C:/Program Files/CloudCompare/cloudcompare.exe\" -SILENT -O -GLOBAL_SHIFT AUTO %f -AUTO_SAVE OFF -FILTER_SF MIN 0.010 -NO_TIMESTAMP -C_EXPORT_FMT BIN -SAVE_CLOUDS")
+cmd <- paste0("FOR %f IN (", wdir, "*_ground_points_SOR.bin) DO \"C:/Program Files/CloudCompare/cloudcompare.exe\" -SILENT -O -GLOBAL_SHIFT AUTO %f -AUTO_SAVE OFF -FILTER_SF MIN 0.01 -NO_TIMESTAMP -C_EXPORT_FMT BIN -SAVE_CLOUDS")
 
 system("cmd.exe", input = cmd, show.output.on.console = FALSE)
 ```
 
-##### 3.6: Calculate Normal Change Rate at smaller neighborhoods, *e.g.,* [-CURV NORMAL_CHANGE 0.05].
+##### 3.6: Calculate Normal Change Rate at smaller neighborhoods, *e.g.,* [-CURV NORMAL_CHANGE 0.25].
 
 ```{r}
 # CloudCompare command
-cmd <- paste0("FOR %f IN (", wdir, "*_SOR_FILTERED_*.bin) DO \"C:/Program Files/CloudCompare/cloudcompare.exe\" -SILENT -O -GLOBAL_SHIFT AUTO %f -AUTO_SAVE OFF -CURV NORMAL_CHANGE 0.05 -NO_TIMESTAMP -C_EXPORT_FMT BIN -SAVE_CLOUDS")
+cmd <- paste0("FOR %f IN (", wdir, "*_SOR_FILTERED_*.bin) DO \"C:/Program Files/CloudCompare/cloudcompare.exe\" -SILENT -O -GLOBAL_SHIFT AUTO %f -AUTO_SAVE OFF -CURV NORMAL_CHANGE 0.2 -NO_TIMESTAMP -C_EXPORT_FMT BIN -SAVE_CLOUDS")
 
 system("cmd.exe", input = cmd, show.output.on.console = FALSE)
 ```
 
-##### 3.7: Filter the cloud based on the calculated curvatures at some threshold, *e.g.,* [-FILTER_SF MIN 0.05].
+##### 3.7: Filter the cloud based on the calculated curvatures at some threshold, *e.g.,* [-FILTER_SF MIN 0.15].
 
 This step filters out points that are above the specified curvature value. The difference from **Step 3.5** is that the curvatures are calculated given smaller neighborhoods, filtering out smaller-scale features.
 
 ```{r}
 # CloudCompare command
-cmd <- paste0("FOR %f IN (", wdir, "*_SOR_FILTERED_*.bin) DO \"C:/Program Files/CloudCompare/cloudcompare.exe\" -SILENT -O -GLOBAL_SHIFT AUTO %f -AUTO_SAVE OFF -FILTER_SF MIN 0.1 -NO_TIMESTAMP -C_EXPORT_FMT LAS -SAVE_CLOUDS")
+cmd <- paste0("FOR %f IN (", wdir, "*_SOR_FILTERED_*.bin) DO \"C:/Program Files/CloudCompare/cloudcompare.exe\" -SILENT -O -GLOBAL_SHIFT AUTO %f -AUTO_SAVE OFF -FILTER_SF MIN 0.01 -NO_TIMESTAMP -C_EXPORT_FMT LAS -SAVE_CLOUDS")
 
 system("cmd.exe", input = cmd, show.output.on.console = FALSE)
 ```
 
 ##### 3.8: Merge the final ground tiles.
 
-A reverse step that combines all tiles into a single *.las* file for final steps in CloudCompare GUI.
+A reverse step that combines all tiles into a single *.las* file for final steps in CloudCompare GUI. The output is saved in the project path, named *merge_ground.las*.
 
 ```{r, results='hide'}
 # first remove all intermediate products .bin
@@ -248,7 +248,7 @@ unlink(paste0(path, "tmp"), recursive = TRUE)
 
 -   Sample points on the surface: highlight the segmented mesh, then `Edit --> Mesh --> SamplePoints` , select `Density = 1000` and uncheck the boxes. Highlight the output, then `File --> Save` and name the ground point cloud following `{site}*{dtm_cloud}*{wgs84utm11n}.tif` and save into the project folder.
 
-> If we're running the script on a subset of tiles, this may be a good stopping point. Explore how the output surface looks like and whether the filtered point cloud does not include any excessively large gaps that may result in concave/convex interpolation. If the output looks fine, we can go back to **Step 3.1** and change the path to `path_tiles` that includes the full dataset.
+> If we're running the script on a subset of tiles, this may be a good stopping point. Explore how the output surface looks and whether the filtered point cloud does not include any excessively large gaps that may result in concave/convex interpolation. If the output looks fine, we can go back to **Step 3.1** and change the path to `path_tiles` that includes the full dataset.
 
 #### 4. Generate DTM raster.
 
