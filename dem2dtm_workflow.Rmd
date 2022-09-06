@@ -9,30 +9,6 @@ output: html_document
 knitr::opts_chunk$set(include = TRUE, echo = TRUE, eval = FALSE)
 ```
 
-```{R, results='hide'}
-# helper function
-merge_tiles <- function(file_path, output_path) {
-  # merge multiple laz/las tiles into a single large file
-  # input: a path to where the tiles are, 
-  # input: a path, including the name without extension, where the merged file will go 
-  # output: a single .las file
-  
-  pkgs <- library("lidR", logical.return = TRUE, quietly = TRUE)
-  if( pkgs == FALSE ) {
-    stop(cat("Package `lidR` is not available"))
-  }
-  ctg <- readLAScatalog(file_path)
-  
-  opt_output_files(ctg) <- output_path
-  opt_chunk_buffer(ctg) <- 0
-  opt_chunk_size(ctg) <- 1e6
-  singlefile_ctg <- catalog_retile(ctg)
-  
-  rm(ctg, singlefile_ctg)
-  
-}
-```
-
 #### DEM to DTM workflow for SfM dense clouds using R and CloudCompare.
 
 The following code is a test version of the workflow and may undergo changes/improvements. Known issues include: (a) from one step in CloudCompare to the next, the number of tiles may be reduced due to the really tiny tiles representing the edges, or (b) if the following code chunk that calls CloudCompare is ran before the current process finishes in the background. [working on resolution]
