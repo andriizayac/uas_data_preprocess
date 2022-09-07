@@ -10,30 +10,102 @@ knitr::opts_chunk$set(include = TRUE, echo = TRUE, eval = FALSE)
 
 #### Canopy Height Model (CHM) to segmented crowns workflow using _lidR_ package.\
 
-The script goes step by step from the canopy height model to a final product that is a geospatial layer of segmented crowns. The following code is a test version of the workflow and may undergo changes/improvements.\
+The script goes step by step from the canopy height model to a final product that is a geospatial layer of segmented crowns and a raster mask where a pixel can belong either to a plant or ground. The following code is a test version of the workflow and may undergo changes/improvements.\
 
-##### *Steps in the workflow:*
+##### *Steps in the workflow*:
+
+1. Load Canopy Height Model\
+2. Detect tree tops\
+3. Outline segment boundaries\
+4. Export output.
 
 ##### *Required software*
+-   R packages: *lidR, future, sf, terra, stars, tidyverse*.
 
--   R packages: *lidR, future, sf, terra, stars, tidyverse, *.
-
-Setting up the environment: first we load the R packages, then provide system paths to the input file(s) and where the output should be stored. The three paths are: (1) path to the location of the dense cloud [*Project folder* above], (2) path to the *tiles* folder, and (3) path to the *test* folder. Lastly, we can specify site name, date of data collection, and CRS for consistent naming convention.
+Setting up the environment: first we load the R packages, then provide system paths to the input file and where the output should be stored. The paths are: (1) path to the project folder that contains a canopy height model file with *\"\*\_chm\_\*\"* pattern in the name (could be the same one from *dem2dtm_workflow.Rmd*), and (2) a path to the *segment_output* folder. Lastly, we can specify site name, date of data collection, and CRS for consistent naming convention.
 
 ```{r, results='hide', message=FALSE}
 # load packages
-pkgs <- c("lidR", "raster", "gstat", "sf", "sp", "viridisLite", "stars", "dplyr")
+pkgs <- c("lidR", "sf","viridisLite", "stars", "terra", "tidyverse")
 sapply(pkgs, require, character.only = TRUE, quietly = TRUE)
 
-
 # specify paths
-path_prj <- "D:/Andrii/20220524_NorthHam/"
-path_tiles <- paste0(path_prj, "tiles/")
-path_test <- paste0(path_prj, "test/")
+path_prj <- "~/Downloads/tmp/"
+path_out <- paste0(path_prj, "segment_output/")
 
+if(dir.exists(path_out) == FALSE)
+  dir.create(path_out)
 
 # data attributes
 site <- "NorthHam"
 date <- "20220524" # in YYYYMMDD format
 prj_crs <- "wgs84utm11N"
 ```
+
+#### 1. Load Canopy Height Model.
+
+```{r}
+f <- list.files(path_prj, pattern = "_chm_.*.tif$", full.names = TRUE)
+chm <- rast(f)
+
+# optionally, we can reclassify values in the raster that are < 0m, for the CHM would be expected to have >= values only. The effect of this step on the segmented objects has not been tested.
+chm_ed <- classify(chm, rcl = matrix(c(-Inf, 0, 0), nc = 3, byrow = TRUE))
+
+plot(chm)
+```
+
+#### 2. Detect tree tops.
+
+```{r, message=FALSE}
+# Allometric function, aka moving window radius
+
+tl <- find_trees(chm, lmf(ws = 1.6, hmin = .1, shape = "circular"))
+ttops <- tl |> st_as_sf()
+```
+
+#### 3. Outline segment boundaries.
+
+```{r}
+# segment trees in CHM
+set.values(chm)
+cro <- silva2016(chm, ttops, max_cr_factor = 1.5, exclusion = 0.25)()
+```
+
+##### Visualize the segmentation output:
+```{r}
+# === visualize
+plot(chm, col = cols)
+plot(cro, add = TRUE, col = sample(colsid))
+plot(ttops, add = TRUE, pch = 19, cex = .5, col = "black")
+```
+
+#### 4. Export output.
+
+```{r}
+# define region of interest (roi) using some buffer distance from the edge of the raster. This could be used to avoid boundary effects on the segmented crowns.
+
+roi <- chm %>% 
+  st_bbox() %>% 
+  st_as_sfc() %>% 
+  st_buffer(-.9)
+
+# tree tops
+tout <- ttops %>% 
+  st_crop(st_bbox(roi)) 
+
+# polygons
+cout <- cro %>% 
+  st_as_stars() %>% 
+  st_as_sf(as_points = FALSE, merge = TRUE) %>% 
+  mutate(var = lengths(st_intersects(., st_buffer(tout, .1)) )) %>% 
+  filter(var == 1) %>% 
+  select(-var) 
+
+# save output to disk as a shapefile
+tout %>% 
+    st_write(paste0(path_out, site, "_ttops.shp"), delete_layer = FALSE)
+
+cout %>% 
+    st_write(paste0(path_out, site, "_cout.shp"), delete_layer = FALSE)
+```
+
