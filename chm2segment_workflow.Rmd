@@ -103,9 +103,9 @@ cout <- cro %>%
 
 # save output to disk as a shapefile
 tout %>% 
-    st_write(paste0(path_out, site, "_ttops.shp"), delete_layer = FALSE)
+    st_write(paste0(path_out, site, "_ttops.shp"), delete_layer = TRUE)
 
 cout %>% 
-    st_write(paste0(path_out, site, "_cout.shp"), delete_layer = FALSE)
+    st_write(paste0(path_out, site, "_crown.shp"), delete_layer = TRUE)
 ```
 
