@@ -13,7 +13,7 @@ knitr::opts_chunk$set(include = TRUE, echo = TRUE, eval = FALSE)
 
 The script goes step by step from the canopy height model to a final product that is a geospatial layer of segmented crowns and a raster mask where a pixel can belong either to a plant or ground. The following code is a test version of the workflow and may undergo changes/improvements.\
 
-**Raster or Cloud-based tree detection:** the script currently includes two parts. Part 1, which goes first, includes all steps to run the segmentation algorithm using a Canopy Height Model raster. The advantage of this approach is that it does not need any point clouds, which is somewhat simpler. Part 2, which is in the end and is currently under development, uses Cloud-based tree detection. The cloud is normalized using DTM and has an advantage of using parallelized algorithms for cloud catalog processing in _lidR_ package. Note, only **Step 2** is different, the region-growing algorithm in **Step 3** and onward is efficient and can be ran on a full raster without the necessity to parallelize. 
+**Raster or Cloud-based tree detection:** the script currently includes two parts. Part 1, which goes first, includes all steps to run the segmentation algorithm using a Canopy Height Model raster. The advantage of this approach is that it does not need any point clouds, which is somewhat simpler. Part 2, which is in the end and is currently under development, uses Cloud-based tree detection. The cloud is normalized using DTM and has an advantage of using parallelized algorithms for cloud catalog processing in _lidR_ package. Note, only **Step 2** is different between two approaches, the region-growing algorithm in **Step 3** and onward is efficient and can be ran on a full raster without the necessity to parallelize. 
 
 ##### *Steps in the workflow*:
 
@@ -26,16 +26,16 @@ The script goes step by step from the canopy height model to a final product tha
 
 -   R packages: *lidR, future, sf, terra, stars, tidyverse, raster*.
 
-Setting up the environment: first we load the R packages, then provide system paths to the input file and where the output should be stored. The paths are: (1) path to the project folder that contains a canopy height model file with *"\*\_chm\_\*"* pattern in the name (could be the same path used in *dem2dtm_workflow.Rmd*), and (2) a path to the *segment_output* folder. Lastly, we can specify site name, date of data collection, and CRS for consistent naming convention.
+Setting up the environment: first we load the R packages, then provide a system path to the input file and where the output should be stored. We will need a path to the project folder that contains a canopy height model file with *"\*\_chm\_\*"* pattern in the name (could be the same path used in *dem2dtm_workflow.Rmd*). Lastly, we can specify site name, date of data collection, and CRS for consistent naming convention.
 
 ```{r, results='hide', message=FALSE}
 # load packages
-pkgs <- c("lidR", "raster", "sf", "stars", "terra", "tidyverse", "viridisLite", "ggplot2")
+pkgs <- c("lidR", "raster", "sf", "stars", "terra", "tidyverse", "ggplot2")
 sapply(pkgs, require, character.only = TRUE, quietly = TRUE)
 
 # === helper stuff: colours
 cols <- gray.colors(255)
-colsid <- sample(viridis(50, alpha = 1, direction = 1, begin = 0))
+colsid <- hcl.colors(50) #sample(viridis(50, alpha = 1, direction = 1, begin = 0))
 
 # specify paths
 path_prj <- "~/Downloads/tmp/"
@@ -54,22 +54,20 @@ This step is optional but is highly recommended before processing the full datas
 
 ##### Crop the Canopy Height Model to a smaller footprint.\
 The cropping factor is the degree to which the we want to subset the full dataset. Higher number means that the resulting raster will be smaller. 
-```{r}
+```{r, message=FALSE, error=FALSE}
 crop_fct <- 2
 
 f <- list.files(path_prj, pattern = "_chm_.*.tif$", full.names = TRUE)
 chm <- rast(f)
 chm <- crop(chm, ext(chm)/crop_fct)
 
-plot(chm)
-
-writeRaster(chm, filename = paste0(path_prj, "chm_test.tif"))
+writeRaster(chm, filename = paste0(path_prj, "chm_test.tif"), overwrite=TRUE)
 ```
 The result of this code chunk should be a small raster named _chm_test.tif_ stored in the project directory. 
 
 #### 1. Load Canopy Height Model.
 ```{r}
-Test <- 1 # this is where we define whether to use the test dataset.
+Test <- 0 # this is where we define whether to use the test dataset.
 # =================================================================
 if(Test == 1) { ptrn = "chm_test.tif$"} else {ptrn = "_chm_.*.tif$" }
 
@@ -131,7 +129,7 @@ plot(ttops$geometry, add = TRUE, pch = 19, cex = .5, col = "black")
 ```
 
 #### 4. Export output.
-This chunk takes the outputs from **Step 2** and **Step 3** and exports it to subfolder in the project directory `path_prj`. If we ran a test dataset, exporting the output is not necessary but is totally fine, we can explore it in, say, QGIS or other software. Otherwise, to run the fine-tuned parameters on the full dataset we'd need to go back to **Step 1**, set `Test = 0`, and run the remaining steps again using the same paramters as we did for the test run. 
+This chunk takes the outputs from **Step 2** and **Step 3** and exports it to subfolder in the project directory `path_prj`. If we ran a test dataset, exporting the output is not necessary but is totally fine, we can explore it in QGIS or other software. Otherwise, to run the fine-tuned parameters on the full dataset we'd need to go back to **Step 1**, set `Test = 0`, and run the remaining steps again using the same paramters as we did for the test run. 
 ```{r, message=FALSE, warning=FALSE}
 # optionally, we could define some region of interest (roi) using a buffer distance from the edge of the raster. This could be used to avoid boundary effects on the segmented crowns. Setting st_buffer(0) will result in no effect.
 roi <- chm |> 
@@ -154,98 +152,12 @@ cout <- cro |>
 # save output to disk as a shapefile
 tout |> 
   filter(treeID %in% cout$treeID) |>
-    st_write(paste0(path_out, site, "_ttops.shp"), delete_layer = TRUE)
+    st_write(paste0(path_prj, "/segment_output/", site, "_ttops.shp"), delete_layer = TRUE)
 
 cout |> 
-    st_write(paste0(path_out, site, "_crown.shp"), delete_layer = TRUE)
+    st_write(paste0(path_prj, "/segment_output/", site, "_crown.shp"), delete_layer = TRUE)
 
-writeRaster(cro, filename = paste0(path_out, site, "_crown_raster.tif"), overwrite = TRUE)
+writeRaster(cro, filename = paste0(path_prj, "/segment_output/", site, "_crown_raster_cloud.tif"), overwrite = TRUE)
 ```
 
 ---
-
-#### Test code for cloud-based tree detection.
-
-```{r, message=FALSE}
-dir.create(paste0(path_prj, "../chm_cloud/"), showWarnings = FALSE)
-
-ctg <- readLAScatalog(paste0(path_prj, "../chm_cloud/"))
-
-f <- list.files(paste0(path_prj, "../"), pattern = "_dtm_", full.names = TRUE)
-dtm <- rast(f) |>
-  crop(extent(ctg)*2) 
-set.values(dtm)
-
-opt_output_files(ctg) <- paste0(path_prj, "../chm_cloud/", "tile_{ID}_norm")
-
-# === normalize height
-library(future)
-plan(multisession)
-
-ctg_norm <- normalize_height(ctg, raster::raster(dtm))
-
-plan(sequential)
-
-```
-
-```{r}
-plan(multisession)
-
-ttops <- locate_trees(ctg_norm, lmf(ws = ws_fn, hmin = .1), uniqueness = "bitmerge")
-```
-
-```{r, message=FALSE}
-lf <- list.files(paste0(path_prj, "../chm_cloud/"), pattern = ".shp$", full.names = TRUE)
-
-slist <- lapply(lf, st_read)
-
-tt <- do.call(rbind, slist) |>
-  group_by(treeID) |>
-  slice_max(Z) |>
-  ungroup() |>
-  mutate(treeID = 1:n())
-
-st_write(tt, paste0(path_prj, "segment_output_2/NorthHam_ttops.shp"), delete_layer = TRUE)
-```
-
-```{r}
-ttops <- st_read(paste0(path_prj, "segment_output_2/NorthHam_ttops.shp"))
-
-f <- list.files(paste0(path_prj, "../"), pattern = "_chm_", full.names = TRUE)
-chm <- rast(f) |>
-  crop(extent(ttops)*1.5)
-
-
-set.values(chm)
-cro <- silva2016(chm, ttops, max_cr_factor = 1.5, exclusion = 0.25)()
-
-```
-
-```{r}
-# export 
-roi <- chm |> 
-  st_bbox() |> 
-  st_as_sfc() |> 
-  st_buffer(-.9)
-
-# tree tops
-tout <- ttops |> 
-  st_crop(st_bbox(roi)) 
-
-# polygons
-cout <- cro |> 
-  st_as_stars() |> 
-  st_as_sf(as_points = FALSE, merge = TRUE) |> 
-  rename(treeID = dsm) |>
-  filter(st_intersects(geometry, st_buffer(tout, .1), sparse = FALSE)[,1] ) 
-
-# save output to disk as a shapefile
-tout |> 
-  filter(treeID %in% cout$treeID) |>
-    st_write(paste0(path_out, site, "_ttops.shp"), delete_layer = TRUE)
-
-cout |> 
-    st_write(paste0(path_out, site, "_crown.shp"), delete_layer = TRUE)
-
-writeRaster(cro, filename = paste0(path_out, site, "_crown_raster.tif"), overwrite = TRUE)
-```
