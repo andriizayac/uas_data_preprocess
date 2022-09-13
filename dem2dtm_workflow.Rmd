@@ -54,12 +54,12 @@ Setting up the environment: first we load the R packages, then provide system pa
 
 ```{r, results='hide', message=FALSE}
 # load packages
-pkgs <- c("lidR", "future", "sf", "mapview", "mapedit", "terra")
+pkgs <- c("lidR", "future", "sf", "mapview", "mapedit", "terra", "devtools")
 sapply(pkgs, require, character.only = TRUE, quietly = TRUE)
-
+source_url("https://github.com/andriizayac/uas_data_preprocess/blob/main/utils/merge_tiles_fn.R?raw=TRUE")
 
 # specify paths
-path_prj <- "D:/Andrii/20220524_NorthHam/"
+path_prj <- "path/to/dense/cloud"
 path_tiles <- paste0(path_prj, "tiles/")
 path_test <- paste0(path_prj, "test/")
 
@@ -69,9 +69,9 @@ if(dir.exists(path_tiles) == FALSE) {
 }
 
 # data attributes
-site <- "NorthHam"
-date <- "20220524" # in YYYYMMDD format
-prj_crs <- "wgs84utm11N"
+site <- "" # 
+date <- "" # in YYYYMMDD format
+prj_crs <- "" # e.g. wgs84utm11n
 ```
 
 *A note on coordinate reference systems:* Nowhere in this code we apply CRS transformations. The output DTM raster will be in the same CRS as the input dense cloud. The dense cloud needs to be in a projected CRS (*e.g.*, wgs84utm11N) so that the *x, y, z* are all on the same scale.
@@ -126,7 +126,7 @@ newts <- catalog_retile(ts)
 This step runs a command to clean the point cloud from outliers. SOR (Statistical Outlier Filter) takes in two arguments: (1) number of neighbors (specifies a radius to search for outliers), and (2) the number of standard deviations as a measure distance from the mean to create a threshold for point removal. Larger values in (1) will take longer to run but will be more stable to noise in the cloud, and smaller values in (2) will set more aggressive threshold.
 
 ```{r}
-path <- path_tiles # (change between test and full dataset paths)
+path <- path_test # (change between test and full dataset paths)
 wdir <- gsub("/", "\\\\", path) # specify where the tiles are 
 
 # CloudCompare command
@@ -139,7 +139,7 @@ system("cmd.exe", input = cmd, show.output.on.console = FALSE)
 
 *note: the CloudCompare CSF function is new and may be unstable when ran from CLI - the output may be placed in unexpected directory on a hard drive. The following chunk includes a line to search for the output and place it back into the project working directory, but providing an approximate path where files are stored, `search_dir` will speed it up. It'd be best to provide a search directory, if the search runs on the entire hard drive it will take a long time and may accidentally grab unrelated files.*
 
-This step runs a command to separate ground from vegetation objects. The objective of this step is to coarsely split vegetation from ground point, erring on the conservative side as the subsequent steps will chip away vegetation from ground more carefully. CSF (Cloth Simulation Filter) is set up to run with a "SLOPE" setting, which allows the algorithm to better separate vegetation from ground on complex topography. The two arguments that can be modified to adjust the output is "CLOTH RESOLUTION" and "CLASS THRESHOLD", best way would be to experiment with different values in CloudCompare based on a point cloud at hand.
+This step runs a command to separate ground from vegetation objects. The objective of this step is to coarsely split vegetation from ground point, erring on the conservative side as the subsequent steps will chip away vegetation from ground more carefully. CSF (Cloth Simulation Filter) is set up to run with a "SLOPE" setting, which allows the algorithm to better separate vegetation from ground on complex topography, but should be shanged to 'FLAT' on even terrain. Two other arguments that can be modified to adjust the output is "CLOTH RESOLUTION" and "CLASS THRESHOLD", best way would be to experiment with different values in CloudCompare based on a point cloud at hand.
 
 ```{r}
 # CloudCompare command
@@ -225,8 +225,16 @@ file.remove(lf[grepl(".*.bin$", lf)])
 # temporary create a copy of the final .las files 
 lf <- list.files(path, pattern = "\\].las$", full.names = TRUE)
 
+# temp folder
 dir.create(paste0(path, "tmp"), showWarnings = FALSE)
 file.copy(lf, gsub("/tile", "/tmp/tile", lf))
+
+# wait until the files transfer
+while(length(lf) < length(list.files(gsub("/tile", "/tmp/tile", lf), pattern = "\\].las$"))) {
+  Sys.sleep(10)
+  
+  lf <- list.files(path, pattern = "\\].las$", full.names = TRUE)
+} 
 
 # merge the final ground tiles
 merge_tiles(paste0(path, "tmp"), paste0(path_prj, "merge_ground"))
@@ -252,7 +260,7 @@ unlink(paste0(path, "tmp"), recursive = TRUE)
 
 #### 4. Generate DTM raster.
 
-Import and highlight the ground point cloud generated from the previous step, then click `Tools --> Projection --> Rasterize`, set `resolution=0.01, direction=Z, cell_height=average, Fill_with=interpolate` --\> `Update grid -> Raster -> check Export Height` and save as .tif file following the name convention `{site}*{dtm}*{wgs84utm11n}.tif` and save into the project.
+Import and highlight the ground point cloud generated from the previous step, then click `Tools --> Projection --> Rasterize`, set `resolution=0.01, direction=Z, cell_height=average, Fill_with=interpolate` --\> `Update grid -> Raster -> check Export Height` and save as .tif file following the name convention `{site}_{dtm}_{wgs84utm11n}.tif` and save into the project.
 
 #### 5. Generate CHM (optionally).
 
@@ -280,7 +288,7 @@ writeRaster(chm, file = paste0(path_prj, "CorralsTrail_20220520_chm_wgs84utm11n.
 This code chunk may be useful if you have hundreds of .laz/.las files that need to be merged before processing. For example, the default WebODM output includes a stack of .laz files that vary in size and point density. These chunks need to be merged first to obtain the dense cloud.
 
 ```{r}
-path_odm_chunks <- "D:/Andrii/20220524_NorthHam/Elmore-County-5-24-2022-all/entwine_pointcloud/ept-data/"
+path_odm_chunks <- "path/to/cloud/chunks"
 
 file_name <- paste(site, date, prj_crs, sep = "_")
 
