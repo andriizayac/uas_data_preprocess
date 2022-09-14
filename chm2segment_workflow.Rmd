@@ -30,7 +30,7 @@ Setting up the environment: first we load the R packages, then provide a system 
 
 ```{r, results='hide', message=FALSE}
 # load packages
-pkgs <- c("lidR", "raster", "sf", "stars", "terra", "tidyverse", "ggplot2")
+pkgs <- c("lidR", "raster", "sf", "stars", "terra", "tidyverse")
 sapply(pkgs, require, character.only = TRUE, quietly = TRUE)
 
 # === helper stuff: colours
@@ -38,16 +38,16 @@ cols <- gray.colors(255)
 colsid <- hcl.colors(50) #sample(viridis(50, alpha = 1, direction = 1, begin = 0))
 
 # specify paths
-path_prj <- "~/Downloads/tmp/"
+path_prj <- "path/to/chm/"
 path_out <- paste0(path_prj, "segment_output/")
 
 if(dir.exists(path_out) == FALSE)
   dir.create(path_out)
 
 # data attributes
-site <- "CorralsTrail"
-date <- "20220520" # in YYYYMMDD format
-prj_crs <- "wgs84utm11n"
+site <- ""
+date <- "" # in YYYYMMDD format
+prj_crs <- "" # eg wgs84utm11n
 ```
 #### 0. Parameter tuning.
 This step is optional but is highly recommended before processing the full dataset. The algorithms and order of application are the same, but it operates on a small subset of the data (_e.g._, 20 x 20m) and can be useful to fine-tune input parameters. To run the script on a test dataset, in **Step 1** set `Test = 1`, otherwise set `Test = 0` to run the algorithm on a full dataset. The former will look for a smaller CHM raster generated from cell below.
@@ -55,7 +55,7 @@ This step is optional but is highly recommended before processing the full datas
 ##### Crop the Canopy Height Model to a smaller footprint.\
 The cropping factor is the degree to which the we want to subset the full dataset. Higher number means that the resulting raster will be smaller. 
 ```{r, message=FALSE, error=FALSE}
-crop_fct <- 2
+crop_fct <- 4
 
 f <- list.files(path_prj, pattern = "_chm_.*.tif$", full.names = TRUE)
 chm <- rast(f)
@@ -67,7 +67,7 @@ The result of this code chunk should be a small raster named _chm_test.tif_ stor
 
 #### 1. Load Canopy Height Model.
 ```{r}
-Test <- 0 # this is where we define whether to use the test dataset.
+Test <- 1 # this is where we define whether to use the test dataset.
 # =================================================================
 if(Test == 1) { ptrn = "chm_test.tif$"} else {ptrn = "_chm_.*.tif$" }
 
@@ -157,7 +157,6 @@ tout |>
 cout |> 
     st_write(paste0(path_prj, "/segment_output/", site, "_crown.shp"), delete_layer = TRUE)
 
-writeRaster(cro, filename = paste0(path_prj, "/segment_output/", site, "_crown_raster_cloud.tif"), overwrite = TRUE)
+writeRaster(cro, filename = paste0(path_prj, "/segment_output/", site, "_crown_raster.tif"), overwrite = TRUE)
 ```
-
 ---
