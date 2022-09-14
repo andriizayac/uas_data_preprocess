@@ -276,8 +276,6 @@ dtm <- resample(dtm, dem)
 
 chm <- dem - dtm
 
-cat('The output CHM model contains: ', sum(is.na(values(chm))),'NA values')
-
 writeRaster(chm, file = paste0(path_prj, "CorralsTrail_20220520_chm_wgs84utm11n.tif"))
 ```
 
