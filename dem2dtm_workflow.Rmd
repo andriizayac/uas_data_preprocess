@@ -276,7 +276,7 @@ dtm <- resample(dtm, dem)
 
 chm <- dem - dtm
 
-writeRaster(chm, file = paste0(path_prj, "CorralsTrail_20220520_chm_wgs84utm11n.tif"))
+writeRaster(chm, file = paste0(path_prj, site, "_", date, "_chm_", prj_crs, ".tif"))
 ```
 
 ------------------------------------------------------------------------
