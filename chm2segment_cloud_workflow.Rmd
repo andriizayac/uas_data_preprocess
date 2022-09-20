@@ -1,0 +1,148 @@
+---
+title: "CHM2Segment workflow"
+author: "Andrii Zaiats"
+date: "Last updated: 2022-09-07"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(include = TRUE, echo = TRUE, eval = FALSE)
+```
+
+#### Canopy Height Model (CHM) to segmented crowns workflow using *lidR* package.
+
+The script goes step by step from the canopy height model to a final product that is a geospatial layer of segmented crowns and a raster mask where a pixel can belong either to a plant or ground. The following code is a test version of the workflow and may undergo changes/improvements.\
+
+**Raster or Cloud-based tree detection:** the script currently includes two parts. Part 1, which goes first, includes all steps to run the segmentation algorithm using a Canopy Height Model raster. The advantage of this approach is that it does not need any point clouds, which is somewhat simpler. Part 2, which is in the end and is currently under development, uses Cloud-based tree detection. The cloud is normalized using DTM and has an advantage of using parallelized algorithms for cloud catalog processing in _lidR_ package. Note, only **Step 2** is different between two approaches, the region-growing algorithm in **Step 3** and onward is efficient and can be ran on a full raster without the necessity to parallelize. 
+
+##### *Steps in the workflow*:
+
+1.  Load Canopy Height Model\
+2.  Detect tree tops\
+3.  Outline segment boundaries\
+4.  Export output.
+
+##### *Required software*
+
+-   R packages: *lidR, future, sf, terra, stars, tidyverse, raster*.
+
+Setting up the environment: first we load the R packages, then provide a system path to the input file and where the output should be stored. We will need a path to the project folder that contains a canopy height model file with *"\*\_chm\_\*"* pattern in the name (could be the same path used in *dem2dtm_workflow.Rmd*). Lastly, we can specify site name, date of data collection, and CRS for consistent naming convention.
+
+```{r, results='hide', message=FALSE}
+# load packages
+pkgs <- c("lidR", "sf", "stars", "terra", "tidyverse")
+sapply(pkgs, require, character.only = TRUE, quietly = TRUE)
+
+# === helper stuff: colours
+cols <- gray.colors(255)
+colsid <- hcl.colors(50) #sample(viridis(50, alpha = 1, direction = 1, begin = 0))
+
+# specify paths
+path_prj <- "~/../../Volumes/az_drive/temp/CorralsTrail"
+path_out <- paste0(path_prj, "segment_output/")
+
+if(dir.exists(path_out) == FALSE)
+  dir.create(path_out)
+
+# data attributes
+site <- "CorralsTrail"
+date <- "20220520" # in YYYYMMDD format
+prj_crs <- "wgs84utm11n"
+```
+
+#### Test code for cloud-based tree detection.
+
+```{r, message=FALSE}
+dir.create(paste0(path_prj, "/chm_cloud/"), showWarnings = FALSE)
+
+ctg <- readLAScatalog(paste0(path_prj, "/test/"))
+
+f <- list.files(path_prj, pattern = "_dtm_.*3cm", full.names = TRUE)
+dtm <- rast(f) |>
+  crop(extent(ctg)*2) 
+set.values(dtm)
+
+opt_output_files(ctg) <- paste0(path_prj, "/chm_cloud/", "tile_{ID}_norm")
+
+# === normalize height
+library(future)
+plan(multisession)
+
+ctg_norm <- normalize_height(ctg, raster::raster(dtm))
+
+plan(sequential)
+
+```
+
+```{r}
+# Allometric function, aka moving window radius
+ws_fn <- function(x) {
+  a <- 2; 
+  b <- 1.5; 
+  h0 <- 0.25
+  
+  r <- a*tanh(x*b)
+  r[r < h0] <- h0
+  return(r)
+}
+plan(multisession)
+
+ttops <- locate_trees(ctg_norm, lmf(ws = ws_fn, hmin = .1), uniqueness = "bitmerge")
+```
+
+```{r, message=FALSE}
+lf <- list.files(paste0(path_prj, "/chm_cloud/"), pattern = ".shp$", full.names = TRUE)
+
+slist <- lapply(lf, st_read)
+
+tt <- do.call(rbind, slist) |>
+  group_by(treeID) |>
+  slice_max(Z) |>
+  ungroup() |>
+  mutate(treeID = 1:n())
+
+st_write(tt, paste0(path_prj, "segment_output/", site, "_ttops_cloud.shp"), delete_layer = TRUE)
+```
+
+```{r}
+ttops <- st_read(paste0(path_prj, "segment_output/", site, "_ttops_cloud.shp"))
+
+f <- list.files(path_prj, pattern = "_chm_", full.names = TRUE)
+chm <- rast(f) |>
+  crop(extent(ttops)*1.5)
+
+
+set.values(chm)
+cro <- silva2016(chm, ttops, max_cr_factor = 1.5, exclusion = 0.25)()
+
+```
+
+```{r}
+# export 
+roi <- chm |> 
+  st_bbox() |> 
+  st_as_sfc() |> 
+  st_buffer(-.9)
+
+# tree tops
+tout <- ttops |> 
+  st_crop(st_bbox(roi)) 
+
+# polygons
+cout <- cro |> 
+  st_as_stars() |> 
+  st_as_sf(as_points = FALSE, merge = TRUE) |> 
+  rename(treeID = dsm) |>
+  filter(st_intersects(geometry, st_buffer(tout, .1), sparse = FALSE)[,1] ) 
+
+# save output to disk as a shapefile
+tout |> 
+  filter(treeID %in% cout$treeID) |>
+    st_write(paste0(path_out, site, "_ttops.shp"), delete_layer = TRUE)
+
+cout |> 
+    st_write(paste0(path_out, site, "_crown.shp"), delete_layer = TRUE)
+
+writeRaster(cro, filename = paste0(path_out, site, "_crown_raster.tif"), overwrite = TRUE)
+```
