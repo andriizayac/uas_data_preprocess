@@ -306,7 +306,7 @@ This code chunk may be useful if we have hundreds of .laz/.las files that need t
 ```{r}
 path_odm_chunks <- "path/to/cloud/chunks"
 
-file_name <- paste(site, date, prj_crs, sep = "_")
+file_name <- paste(site, date, "_denseCloud_", prj_crs, sep = "_")
 
 merge_tiles(path_odm_chunks, paste0(path_prj, file_name))
 ```
