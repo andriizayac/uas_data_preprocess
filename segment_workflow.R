@@ -1,4 +1,4 @@
-pkgs <- c("lidR", "raster", "gstat", "sf", "sp", "viridisLite", "stars", "dplyr")
+pkgs <- c("lidR", "gstat", "sf", "viridisLite", "stars", "tidyverse")
 sapply(pkgs, require, character.only = TRUE)
 
 # === helper stuff
