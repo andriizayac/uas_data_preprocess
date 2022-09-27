@@ -52,6 +52,8 @@ A good practice would be to create a separate folder for each dense cloud to be 
 
 Setting up the environment: first we load the R packages, then provide system paths to the input file(s) and where the output should be stored. The three paths are: (1) path to the location of the dense cloud [*Project folder* above], (2) path to the *tiles* folder, and (3) path to the *test* folder. Lastly, we can specify site name, date of data collection, and CRS for consistent naming convention.
 
+##### Set up project environment
+
 ```{r, results='hide', message=FALSE}
 # load packages
 pkgs <- c("lidR", "future", "sf", "mapview", "mapedit", "terra", "devtools")
@@ -60,7 +62,7 @@ sapply(pkgs, require, character.only = TRUE, quietly = TRUE)
 devtools::source_url("https://github.com/andriizayac/uas_data_preprocess/blob/main/utils/merge_tiles_fn.R?raw=TRUE")
 
 # specify paths
-path_prj <- "path/to/denseCloud/"
+path_prj <- "D:/Andrii/20220524_NorthHam/"
 path_tiles <- paste0(path_prj, "tiles/")
 path_test <- paste0(path_prj, "test/")
 
@@ -68,9 +70,9 @@ dir.create(path_tiles, showWarnings = FALSE)
 dir.create(path_test, showWarnings = FALSE)
 
 # data attributes
-site <- "" # 
-date <- "" # in YYYYMMDD format
-prj_crs <- "" # e.g. wgs84utm11n
+site <- "NorthHam" # 
+date <- "20220524" # in YYYYMMDD format
+prj_crs <- "wgs84utm11n" # e.g. wgs84utm11n
 ```
 
 *A note on coordinate reference systems:* Nowhere in this code we apply CRS transformations. The output DTM raster will be in the same CRS as the input dense cloud. The dense cloud needs to be in a projected CRS (*e.g.*, wgs84utm11n) so that the *x, y, z* are all on the same scale.
@@ -144,7 +146,7 @@ This step runs a command to separate ground from vegetation objects. The objecti
 
 ```{r}
 # CloudCompare command
-cmd <- paste0("FOR %f IN (", wdir, "*.las) DO \"C:/Program Files/CloudCompare/cloudcompare.exe\" -SILENT -O -GLOBAL_SHIFT AUTO %f -AUTO_SAVE OFF -CSF -SCENES SLOPE -CLOTH_RESOLUTION 0.1 -MAX_ITERATION 500 -CLASS_THRESHOLD 0.1 -EXPORT_GROUND -NO_TIMESTAMP -C_EXPORT_FMT BIN")
+cmd <- paste0("FOR %f IN (", wdir, "*.las) DO \"C:/Program Files/CloudCompare/cloudcompare.exe\" -SILENT -O -GLOBAL_SHIFT AUTO %f -AUTO_SAVE OFF -CSF -SCENES FLAT -CLOTH_RESOLUTION 0.1 -MAX_ITERATION 500 -CLASS_THRESHOLD 0.1 -EXPORT_GROUND -NO_TIMESTAMP -C_EXPORT_FMT BIN")
 
 system("cmd.exe", input = cmd, show.output.on.console = FALSE)
 
@@ -194,7 +196,7 @@ cmd <- paste0("FOR %f IN (", wdir, "*_ground_points_SOR.bin) DO \"C:/Program Fil
 system("cmd.exe", input = cmd, show.output.on.console = FALSE)
 ```
 
-##### 3.6: Calculate Normal Change Rate at smaller neighborhoods, *e.g.,* [-CURV NORMAL_CHANGE 0.25].
+##### 3.6: Calculate Normal Change Rate at smaller neighborhoods, *e.g.,* [-CURV NORMAL_CHANGE 0.2].
 
 ```{r}
 # CloudCompare command
@@ -203,7 +205,7 @@ cmd <- paste0("FOR %f IN (", wdir, "*_SOR_FILTERED_*.bin) DO \"C:/Program Files/
 system("cmd.exe", input = cmd, show.output.on.console = FALSE)
 ```
 
-##### 3.7: Filter the cloud based on the calculated curvatures at some threshold, *e.g.,* [-FILTER_SF MIN 0.15].
+##### 3.7: Filter the cloud based on the calculated curvatures at some threshold, *e.g.,* [-FILTER_SF MIN 0.01].
 
 This step filters out points that are above the specified curvature value. The difference from **Step 3.5** is that the curvatures are calculated given smaller neighborhoods, filtering out smaller-scale features.
 
@@ -228,10 +230,12 @@ lf <- list.files(path, pattern = "\\].las$", full.names = TRUE)
 
 # temp folder
 dir.create(paste0(path, "tmp"), showWarnings = FALSE)
-file.copy(lf, gsub("/tile", "/tmp/tile", lf))
+Sys.sleep(2)
+file.copy(lf, gsub(path, paste0(path, "tmp/"), lf))
+Sys.sleep(5)
 
 # wait until the files transfer
-if(length(lf) > length(list.files(gsub("/tile", "/tmp/tile", lf), pattern = "\\].las$"))) {
+if(length(lf) > length(list.files(paste0(path, "/tmp/"), pattern = "\\].las$"))) {
   Sys.sleep(10)
   
   lf <- list.files(path, pattern = "\\].las$", full.names = TRUE)
@@ -272,12 +276,14 @@ las <- add_attribute(las, normalize_height(las, dtm0)$Z, "dist")
 
 las1 <- filter_poi(las, dist > -0.05 & dist < 0.05)
 
-dtm1 <- rasterize_terrain(las1, res = 0.03, algorithm = tin())
+dtm1 <- rasterize_terrain(las1, res = 0.3, algorithm = tin()) |>
+  disagg(fact = 10, method = "bilinear") |>
+  focal(w = 15, fun = "mean")
 
 pts <- as.data.frame(dtm1, xy = TRUE)
 write.csv(pts, file = paste0(path_prj, "ground_pts.csv"), row.names = FALSE)
 
-writeRaster(dtm1, file = paste0(path_prj, site, date, "_dtm_", prj_crs, ".tif"))
+writeRaster(dtm1, file = paste0(path_prj, site, date, "_dtm_", prj_crs, ".tif"), overwrite = TRUE)
 ```
 
 #### 5. Generate CHM (optionally).
@@ -286,7 +292,7 @@ writeRaster(dtm1, file = paste0(path_prj, site, date, "_dtm_", prj_crs, ".tif"))
 f <- list.files(path_prj, pattern = "^dsm.tif$", recursive = TRUE, full.names = TRUE)[1]
 dem <- rast(f)
 
-f <- list.files(path_prj, pattern = "_dtm_.*.tif$", recursive = TRUE, full.names = TRUE)[1]
+f <- list.files(path_prj, pattern = "_dtm_.*.tif$", full.names = TRUE)
 dtm <- rast(f)
 
 dem <- crop(dem, ext(dtm))
@@ -294,7 +300,7 @@ dtm <- resample(dtm, dem)
 
 chm <- dem - dtm
 
-writeRaster(chm, file = paste0(path_prj, site, "_", date, "_chm_", prj_crs, ".tif"))
+writeRaster(chm, file = paste0(path_prj, site, "_", date, "_chm_", prj_crs, ".tif"), overwrite = TRUE)
 ```
 
 ------------------------------------------------------------------------

@@ -34,7 +34,7 @@ pkgs <- c("lidR", "sf", "stars", "terra", "tidyverse", "devtools", "mapview", "m
 sapply(pkgs, require, character.only = TRUE, quietly = TRUE)
 
 # specify paths
-path_prj <- "path/to/chm/"
+path_prj <- "path/to/chm"
 path_out <- paste0(path_prj, "segment_output/")
 
 if(dir.exists(path_out) == FALSE)
@@ -50,7 +50,7 @@ prj_crs <- "" # eg wgs84utm11n
 
 This step is optional but is highly recommended before processing the full dataset. The algorithms and order of application are the same, but it operates on a small subset of the data (*e.g.*, 20 x 20m) and can be useful to fine-tune input parameters. To run the script on a test dataset, in **Step 1** set `Test = 1`, otherwise set `Test = 0` to run the algorithm on a full dataset. The former will look for a smaller CHM raster generated from code cell below.
 
-##### Crop the Canopy Height Model to a smaller footprint. 
+##### Crop the Canopy Height Model to a smaller footprint.
 
 The cropping factor is the degree to which the we want to subset the full dataset. Higher number means that the resulting raster will be smaller.
 
