@@ -62,7 +62,7 @@ sapply(pkgs, require, character.only = TRUE, quietly = TRUE)
 devtools::source_url("https://github.com/andriizayac/uas_data_preprocess/blob/main/utils/merge_tiles_fn.R?raw=TRUE")
 
 # specify paths
-path_prj <- "D:/Andrii/20220524_NorthHam/"
+path_prj <- "path/to/projectfolder/with/denseCloud"
 path_tiles <- paste0(path_prj, "tiles/")
 path_test <- paste0(path_prj, "test/")
 
@@ -70,9 +70,9 @@ dir.create(path_tiles, showWarnings = FALSE)
 dir.create(path_test, showWarnings = FALSE)
 
 # data attributes
-site <- "NorthHam" # 
-date <- "20220524" # in YYYYMMDD format
-prj_crs <- "wgs84utm11n" # e.g. wgs84utm11n
+site <- "" # 
+date <- "" # in YYYYMMDD format
+prj_crs <- "" # e.g. wgs84utm11n
 ```
 
 *A note on coordinate reference systems:* Nowhere in this code we apply CRS transformations. The output DTM raster will be in the same CRS as the input dense cloud. The dense cloud needs to be in a projected CRS (*e.g.*, wgs84utm11n) so that the *x, y, z* are all on the same scale.
@@ -107,7 +107,7 @@ plan(sequential) # close parallel setup
 
 #### 2. Select a few tiles for test runs and parameter tuning.
 
-We can skip this step if we know the parameters for CloudCompare filtering. Otherwise, this step may be handy and save time if we have a large dataset at hand. The `tile_size` should be same as in **Step 1**. To run the workflow on a subset of tiles, in ***Step 3.1*** instead of using `path_tiles` that contains the full data set, we can use `path_test`, which will contain a subset of tiles we select here.
+We can skip this step if we know the parameters for CloudCompare filtering. Otherwise, this step may be handy and save time if we have a large dataset at hand. The `tile_size` should be same as in **Step 1**. To run the workflow on a subset of tiles, in ***Step 3.1*** we need to specify `Test = 1` in the beginning of the chunk,  which will contain a subset of tiles we select here. Otherwise, we set `Test = 0`, to run the steps on a full dataset. 
 
 ```{r, message=FALSE}
 tile_size <- 10
@@ -129,7 +129,14 @@ newts <- catalog_retile(ts)
 This step runs a command to clean the point cloud from outliers. SOR (Statistical Outlier Filter) takes in two arguments: (1) number of neighbors (specifies a radius to search for outliers), and (2) the number of standard deviations as a measure distance from the mean to create a threshold for point removal. Larger values in (1) will take longer to run and will consider larger neighborhoods to determine points that represent noise, and smaller values in (2) will set a more aggressive threshold.
 
 ```{r}
-path <- path_tiles # (change between test and full dataset paths)
+Test = 1
+
+if(Test == 1) {
+  path <- path_test
+} else {
+  path <- path_tiles
+}
+
 wdir <- gsub("/", "\\\\", path) # specify where the tiles are 
 
 # CloudCompare command
