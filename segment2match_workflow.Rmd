@@ -1,0 +1,140 @@
+---
+title: "Segment2Match workflow"
+author: "Andrii Zaiats, Trevor Caughlin"
+date: "Last updated: 2022-10-05"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(include = TRUE, echo = TRUE, eval = FALSE)
+```
+
+#### Matching automatically segmented shrubs to field gps points and plant data.
+
+The matching steps follow the output from `chm2segment_workflow.Rmd` and will require the following inputs:
+
+1. Canopy height model (CHM)\
+2. Orthomosaic from Phantom 4 Multispectral (P4M)\
+3. Segmentation output saved as an ESRI Shapefile\
+4. Field data with ID, lat, long attributes (Shapefile or geojson), which is available from [here](https://drive.google.com/file/d/1zSCFLZL6U-wAhCxf2zg_dSYZx8aX-GgH/view?usp=sharing).
+
+```{r}
+pkgs <- c("tidyverse", "terra", "sf", "lidR", "stars", "exactextractr")
+sapply(pkgs, require, character.only = TRUE, quietly = TRUE)
+```
+
+First, lets organize the data such that all input and output files will be stored together, in the same project directory. If the naming conventions have been followed from the previous scripts, the following search patterns will be expected and used in the project directory. If that's not the case, we can adjust the character patterns depending on how our files are named and stored.  
+
+> Canopy Height Model: `_chm_`\
+> Orthomosaic: `_P4M_ortho_` & `_RGB_ortho_`\
+> Segmentation shapefile: `/segmentation_output/.*_crowns_.*.shp`\
+> Field data: `plant_data.geojson`\
+
+
+```{r}
+path_prj <- "~/../../Volumes/az_drive/temp/CorralsTrail/" # "path/to/[chm, ortho, segment...]/files"
+
+chm <- rast(list.files(path_prj, pattern = "_chm_", full.names = TRUE))
+ortho_m <- rast(list.files(path_prj, pattern = "_P4M_ortho_", full.names = TRUE))
+ortho_rgb <- rast(list.files(path_prj, pattern = "_RGB_ortho_", full.names = TRUE))
+crowns <- st_read(list.files(paste0(path_prj, "segmentation_output/"), pattern = ".*_crowns_.*shp", full.names = TRUE))
+plants <- st_read(list.files(path_prj, pattern = "plant_data.geojson", full.names = TRUE))
+```
+
+Next, we will match field points with spatially corresponding segments, in other words, attach plant data (ID, Class, Species, Height > 25 cm) to plant polygons. The following chunk accomplishes this task by creating a 5 cm buffer around each field point and using a spatial overlap assigns a point to a segment. Two issues are currently unresolved: (1) If a point with a small buffer overlaps two neighboring polygons the same ID will be assigned to both of them; (2) If a segment includes >1 points, only the first ID is used, others are ignored. 
+
+Unmatched segments (crowns) will be assigned `NA` for plant-level attributes.
+
+```{r}
+crowns |>
+  mutate(Species = sapply(st_intersects(geometry, st_buffer(plants, 0.05)), 
+                          function(x) { tmp = plants$Species[x]
+                          out = ifelse(length(tmp) == 0, NA, tmp[1])}),
+         Class = sapply(st_intersects(geometry, st_buffer(plants, 0.05)), 
+                        function(x) { tmp = plants$Class[x]
+                        out = ifelse(length(tmp) == 0, NA, tmp[1])})) |>
+  rename(ID = treeID) -> crowns_df
+```
+
+
+From here on, we will be adding more attributes to the `crowns_df` object that may help in object-based classification. Specifically, we will extract summary statistics from the Canopy Height Model, geometric features of the segments, and spectral information from P4M orthomosaic.
+
+##### Geometric features: area, perimeter, edge-to-area ratio
+
+```{r}
+crowns_df |>
+  mutate(area = as.numeric(st_area(geometry)), 
+         perimeter = st_length(st_cast(geometry, "MULTILINESTRING")) |>
+           as.numeric()) |>
+  mutate(edge_to_area_ratio = perimeter/area) -> crowns_df
+```
+
+
+##### Spectral data from P4M: B, G, R, RE, NIR, ndvi, msavi, savi
+Blue (B): 450 nm ? 16 nm;  
+Green (G): 560 nm ? 16 nm;  
+Red (R): 650 nm ? 16 nm;  
+Red edge (RE): 730 nm ? 16 nm;  
+Near-infrared (NIR): 840 nm ? 26 nm.
+
+```{r}
+multispec_extract <- exactextractr::exact_extract(ortho_m, crowns_df)
+
+# NDVI = (NIR-Red)/(NIR+RED)
+# MSAVI2 = (1/2) * (2 * (NIR +1) - sqrt((2 * NIR + 1)^2-8(NIR - Red)))
+# EVI = 2.5*(NIR - Red) / (NIR + 6*Red - 7.5*Blue + 1)
+
+idx <- lapply(multispec_extract, function(x){
+  weight <- x[["coverage_fraction"]]
+    tndvi <- (x[["NIR"]] - x[["Red"]])/(x[["NIR"]] + x[["Red"]]) * weight
+    
+    tmsavi <- ( (1/2) * (2*(x[["NIR"]]+1) - sqrt((2*x[["NIR"]]+1)^2 - 8*(x[["NIR"]] - x[["Red"]])) ) ) * weight 
+    
+    tevi <- 2.5*(x[["NIR"]] - x[["Red"]])/(x[["NIR"]] + 6*x[["Red"]] - 7.5*x[["Blue"]] +1) * weight
+    ndvi <- mean(tndvi)/sum(weight); sd_ndvi <- sd(tndvi)/sum(weight)
+    msavi <- mean(tmsavi)/sum(weight); sd_msavi <- sd(tmsavi)/sum(weight)
+    evi <- mean(tevi)/sum(weight); sd_evi <- sd(tevi)/sum(weight)
+    
+  out <- c(ndvi, msavi, evi, sd_ndvi, sd_msavi, sd_evi)
+  return( ifelse(out > -1e6, out, NA) )
+}) 
+idx_df <- do.call(rbind, idx) |>
+  as.data.frame() |>
+  rename(ndvi = V1, msavi = V2, evi = V3, stdev_ndvi = V4, stdev_msavi = V5, stdev_evi = V6) 
+  
+# spectral signals
+spec <- exactextractr::exact_extract(ortho_m, crowns_df, fun = c("mean", "stdev")) |> dplyr::select(-contains("2022"))
+
+crowns_df |>
+  bind_cols(spec, idx_df) -> crowns_df
+```
+
+##### Spectral data from RGB: B, G, R
+```{r}
+rgb_extract <- exactextractr::exact_extract(ortho_rgb, crowns_df, fun = c("mean"))
+
+crowns_df |>
+  bind_cols(select(rgb_extract, c("mean.red", "mean.green", "mean.blue"))) -> crowns_df
+```
+
+##### Structural features based on CHM: mean, sd, min, max
+```{r}
+chm_extract <- exactextractr::exact_extract(chm, crowns_df, fun = c("mean", "stdev", "min", "max"))
+names(chm_extract) <- paste0("chm_", names(chm_extract))
+
+crowns_df |>
+  bind_cols(chm_extract) -> crowns_df
+```
+
+-----
+
+##### Export the final data table
+```{r}
+cro <- as.data.frame(crowns_df) |> dplyr::select(-geometry)
+
+st_write(crowns_df, paste0(path_prj, "crowns_df.shp"))
+write.csv(cro, file = paste0(path_prj, "crowns_df.csv"), row.names = FALSE)
+```
+
+
+
