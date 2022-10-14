@@ -138,7 +138,9 @@ if(Test == 1) {
 }
 
 wdir <- gsub("/", "\\\\", path) # specify where the tiles are 
+```
 
+```{r}
 # CloudCompare command
 cmd <- paste0("FOR %f IN (", wdir, "*.las) DO \"C:/Program Files/CloudCompare/cloudcompare.exe\" -SILENT -O -GLOBAL_SHIFT AUTO %f -AUTO_SAVE OFF -SOR 200 4 -NO_TIMESTAMP -C_EXPORT_FMT BIN -SAVE_CLOUDS")
 
@@ -149,7 +151,7 @@ system("cmd.exe", input = cmd, show.output.on.console = FALSE)
 
 *note: the CloudCompare CSF function is new and may be unstable when ran from CLI - the output may be placed in unexpected directory on a hard drive. The following chunk includes a line to search for the output and place it back into the project working directory, but providing an approximate path where files are stored, `search_dir` will speed it up. It'd be best to provide a search directory, if the search runs on the entire hard drive it will take a long time and may accidentally grab unrelated files.*
 
-This step runs a command to separate ground from vegetation objects. The objective of this step is to coarsely split vegetation from ground point, erring on the conservative side as the subsequent steps will chip away vegetation from ground more carefully. CSF (Cloth Simulation Filter) is set up to run with a "SLOPE" setting, which allows the algorithm to better separate vegetation from ground on complex topography, but should be shanged to 'FLAT' on even terrain. Two other arguments that can be modified to adjust the output is "CLOTH RESOLUTION" and "CLASS THRESHOLD", best way would be to experiment with different values in CloudCompare based on a point cloud at hand.
+This step runs a command to separate ground from vegetation objects. The objective of this step is to coarsely split vegetation from ground point, erring on the conservative side as the subsequent steps will chip away vegetation from ground more carefully. CSF (Cloth Simulation Filter) is set up to run with a "SLOPE" setting, which allows the algorithm to better separate vegetation from ground on complex topography, but should be changed to 'FLAT' on even terrain. Two other arguments that can be modified to adjust the output is "CLOTH RESOLUTION" and "CLASS THRESHOLD", best way would be to experiment with different values in CloudCompare based on a point cloud at hand.
 
 ```{r}
 # CloudCompare command
@@ -260,11 +262,11 @@ unlink(paste0(path, "tmp"), recursive = TRUE)
 
 #### 4. Generate DTM raster.
 
-The final steps to produce a DTM and subsequently use it to calculate CHM will use the *lidR* package to interpolate the ground surface between the remaing points in the filtered point cloud (*i.e.* output from **Step 3.8**). The chunk of code below implements the following operations:
+The final steps to produce a DTM and subsequently use it to calculate CHM will use the *lidR* package to interpolate the ground surface between the remaining points in the filtered point cloud (*i.e.* output from **Step 3.8**). The chunk of code below implements the following operations:
 
 -   Assigns all remaining points as *ground points*.
 
--   Interpolates the gaps using Triangular Irregular Netowork (TIN) algorithm.
+-   Interpolates the gaps using Triangular Irregular Network (TIN) algorithm.
 
 -   Discards ground points that are more than 5 cm below and 2 cm above the interpolated surface.
 
