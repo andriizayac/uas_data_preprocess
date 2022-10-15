@@ -21,7 +21,6 @@ The following code is a test version of the workflow and may undergo changes/imp
 
 3.  Use CloudCompare (CC) to clean DEM down to "*ground points*" only:
 
-    -   Apply SOR filter to remove outliers;\
     -   Apply CSF algorithm to remove large vegetation chunks;\
     -   Apply SOR filter to remove outliers;\
     -   Calculate Normal Rate change (*e.i.*, curvature): large neighborhood;\
@@ -124,10 +123,7 @@ newts <- catalog_retile(ts)
 
 *For most of Step 3 the script runs CloudCompare commands via Command Line Interface (CLI).* *Note: while the script in each chunk may indicate that the program has finished after we ran it, it may actually still run in the background for a while in CloudCompare. Running the next step before the previous has finished may cause the loss of tiles. One way to keep an eye on the actual progress can be to open the project folder and check the times each chunk was created or modified, which should be consistent for all tiles.*
 
-##### 3.1: Denoise using SOR filter, *e.g.,* [-SOR 200 4]
-
-This step runs a command to clean the point cloud from outliers. SOR (Statistical Outlier Filter) takes in two arguments: (1) number of neighbors (specifies a radius to search for outliers), and (2) the number of standard deviations as a measure distance from the mean to create a threshold for point removal. Larger values in (1) will take longer to run and will consider larger neighborhoods to determine points that represent noise, and smaller values in (2) will set a more aggressive threshold.
-
+##### 3.1: Create a path for *CloudCompare* command line interface.
 ```{r}
 Test = 1
 
@@ -138,13 +134,6 @@ if(Test == 1) {
 }
 
 wdir <- gsub("/", "\\\\", path) # specify where the tiles are 
-```
-
-```{r}
-# CloudCompare command
-cmd <- paste0("FOR %f IN (", wdir, "*.las) DO \"C:/Program Files/CloudCompare/cloudcompare.exe\" -SILENT -O -GLOBAL_SHIFT AUTO %f -AUTO_SAVE OFF -SOR 200 4 -NO_TIMESTAMP -C_EXPORT_FMT BIN -SAVE_CLOUDS")
-
-system("cmd.exe", input = cmd, show.output.on.console = FALSE)
 ```
 
 ##### 3.2: Apply CSF for initial separation of Ground and Vegetation, *e.g.,* [-CSF -SCENES SLOPE -CLOTH_RESOLUTION 0.1 -MAX_ITERATION 500 -CLASS_THRESHOLD 0.2 -EXPORT_GROUND]
@@ -176,7 +165,7 @@ file.rename(lf, lfnew)
 
 ##### 3.3: Denoise again using SOR filter, *e.g.,* [-SOR 100 2].
 
-This step runs a command to clean the point cloud from outliers. SOR (Statistical Outlier Filter) takes in two arguments: (1) number of neighbors (specifies a radius to search for outliers), and (2) the number of standard deviations as a measure distance from the mean to create a threshold for point removal. The interpretation of the inputs is the same as in **Step 3.1**.
+This step runs a command to clean the point cloud from outliers. SOR (Statistical Outlier Filter) takes in two arguments: (1) number of neighbors (specifies a radius to search for outliers), and (2) the number of standard deviations as a measure distance from the mean to create a threshold for point removal. Larger values in (1) will take longer to run and will consider larger neighborhoods to determine points that represent noise, and smaller values in (2) will set a more aggressive threshold.
 
 ```{r}
 # CloudCompare command
