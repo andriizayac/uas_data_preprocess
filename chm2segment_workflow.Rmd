@@ -34,7 +34,7 @@ pkgs <- c("lidR", "sf", "stars", "terra", "tidyverse", "devtools", "mapview", "m
 sapply(pkgs, require, character.only = TRUE, quietly = TRUE)
 
 # specify paths
-path_prj <- "path/to/chm"
+path_prj <- "path/to/chm.dtm.pointCloud tiles folder"
 path_out <- paste0(path_prj, "segment_output/")
 
 if(dir.exists(path_out) == FALSE)
@@ -48,50 +48,52 @@ prj_crs <- "" # eg wgs84utm11n
 
 #### 0. Parameter tuning.
 
-This step is optional but is highly recommended before processing the full dataset. The algorithms and order of application are the same, but it operates on a small subset of the data (*e.g.*, 20 x 20m) and can be useful to fine-tune input parameters. To run the script on a test dataset, in **Step 1** set `Test = 1`, otherwise set `Test = 0` to run the algorithm on a full dataset. The former will look for a smaller CHM raster generated from code cell below.
+This step, is optional but is highly recommended before processing the full dataset. The algorithms and order of application are the same, but it operates on a small subset of the data (*e.g.*, 20 x 20m) and can be useful to fine-tune input parameters. To run the script on a test dataset, in **Step 1** set `Test = 1`, otherwise set `Test = 0` to run the algorithm on a full dataset. The former will look for a smaller CHM raster generated from code cell below.
 
 ##### Crop the Canopy Height Model to a smaller footprint.
 
 The cropping factor is the degree to which the we want to subset the full dataset. Higher number means that the resulting raster will be smaller.
 
 ```{r, message=FALSE, error=FALSE, warning=FALSE}
-if(length(list.files(paste0(path_prj, "test"), pattern = ".las$")) > 0){
-  roi <- readLAScatalog(paste0(path_prj, "test/"))  
-} else {
-  tiles <- readLAScatalog(paste0(path_prj, "tiles"))
-  roi <- catalog_select(tiles)
-}
+tiles <- readLAScatalog(paste0(path_prj, "tiles"))
+
+ts <- catalog_select(tiles)
 
 f <- list.files(path_prj, pattern = "_chm_.*.tif$", full.names = TRUE)
-chm <- rast(f)
-chm <- crop(chm, extent(roi))
+chm <- crop( rast(f), extent(ts))
 
-writeRaster(chm, filename = paste0(path_prj, "chm_test.tif"), overwrite=TRUE)
+writeRaster(chm, filename = paste0(path_prj, "chm_test.tif"))
 ```
 
 The result of this code chunk should be a small raster named *chm_test.tif* stored in the project directory.
 
-#### 1. Load Canopy Height Model.
+#### 1. Load Canopy Height Model and the _.las_ catalog (denseCloud tiles). Note, the `tiles/` folder needs to contain only the unprocessed tiles as the catalog function reads all _.las_ files in the directory. 
 
 ```{r}
-Test <- 1 # this is where we define whether to use the test dataset.
+Test <- 0 # this is where we define whether to use the test dataset.
 # =================================================================
-if(Test == 1) { ptrn = "chm_test.tif$"} else {ptrn = "_chm_.*.tif$" }
+
+if(Test == 1) { 
+  ptrn = "chm_test.tif$" 
+  tpath = paste0(path_prj, "test/")
+  } else {
+  ptrn = "_chm_.*.tif$" 
+  tpath = paste0(path_prj, "tiles/")}
 
 f <- list.files(path_prj, pattern = ptrn, full.names = TRUE)
 chm <- rast(f) |>
   classify(rcl = matrix(c(-Inf, 0, 0, 
                            3, Inf, 3), nc = 3, byrow = TRUE))
 
-plot(chm)
+ts <- readLAScatalog(paste0(tpath))
 ```
 
 #### 2. Detect tree tops.
 
 The result from the tree detection algorithm is a spatial point layer. The performance of the algorithm depends on three input parameters: $a, b, h_0$.\
 
-2.1 Increasing $a$ will result in less clumping of individuals and it will affect proportionally small and large plants. Really small values will result in about equal clumping of smaller plants close to the ground surface and on top of larger shrubs (*i.e.*, individual branches sticking up will be treated as individual shrubs).\
-2.2 Higher values for $b$ will result in fewer plants detected close to the edge of larger individuals. In other words, while larger individuals should still be detected, smaller plants may be missed when located closer to larger ones.\
+2.1 Increasing $a$ will result in less clumping of individuals and it will affect proportionally small and large plants. Really small values will result in about equal clumping of smaller plants close to the ground surface and on top of larger shrubs (*e.g.*, individual branches sticking up may be treated as individual shrubs).\
+2.2 Higher values for $b$ will result in fewer plants detected close to the edge of larger individuals. In other words, while larger individuals should still be detected, smaller plants may be missed only when located closer to larger ones.\
 2.3 The value for $h_0$ controls the minimum search radius and accounts for the possibility that CHM may contain negative values. Smaller values for $h_0$ will likely result in more plants detected close to the ground surface.\
 
 ```{r, message=FALSE, results='hide'}
@@ -118,10 +120,10 @@ if(length(f) == 1) {
   ortho <- rast(f)
   plotRGB(ortho)
   plot(ttops$geometry, add = TRUE, pch = 4, col = "darkblue")
+} else {
+  plot(chm)
+  plot(ttops$geometry, add = TRUE, pch = 4, col = "darkblue")
 }
-
-plot(chm)
-plot(ttops$geometry, add = TRUE, pch = 4, col = "darkblue")
 ```
 
 #### 3. Outline segment boundaries and visualize the output.
@@ -135,23 +137,21 @@ One choice is `silva2016()` algorithm. The performance of this algorithm depends
 Another choice is `dalponte2016()` . This algorithm takes four different parameters that will determine how segments will be created. The help page `?lidR::dalponte2016` provides a good explanation of the four parameters.
 
 ```{r}
-# segment trees in CHM
-set.values(chm)
-crowns <- dalponte2016(chm, ttops, th_tree = .15, th_seed = .2, th_cr = .1, max_cr = 150)()
+# processing las catalogs requires a temp directory
+opt_output_files(ts) <- paste0(tpath, "seg_tile_{ID}")
 
-# === apply screening to remove tiny polygons (e.g., 1 pixel) 
-keep <- freq(crowns) |>
-  filter(count > 1)
-# ===
+# segment trees
+algo <- dalponte2016(chm, ttops, th_tree = .15, th_seed = .2, th_cr = .1, max_cr = 150)
 
-crowns |> 
-  st_as_stars() |> 
-  st_as_sf(as_points = FALSE, merge = TRUE) |> 
-  rename(treeID = dsm) |>
-  group_by(treeID) |> 
-  filter(treeID %in% keep$value) |>
-  summarize(geometry = st_union(geometry)) -> cro
+tscro <- segment_trees(ts, algorithm = algo, uniqueness = "bitmerge")
 
+cro <- crown_metrics(tscro, func = .stdtreemetrics, geom = "concave", concaveman = c(7,0)) |>
+  select(-Z) |>
+  st_join(ttops) |>
+  filter(npoints > 10) |>
+  group_by(treeID.x) |>
+  slice_max(Z) |> ungroup() |>
+  select(-treeID.x) |> rename("treeID" = "treeID.y") 
 
 plot(chm)
 plot(cro$geometry, add = TRUE)
@@ -164,30 +164,16 @@ This chunk takes the outputs from **Step 2** and **Step 3** and exports it to su
 
 ```{r, message=FALSE, warning=FALSE}
 # optionally, we could define some region of interest (roi) using a buffer distance from the edge of the raster. This could be used to avoid boundary effects on the segmented crowns. Setting st_buffer(0) will bear no effect.
-roi <- chm |> 
-  st_bbox() |> 
-  st_as_sfc() |> 
-  st_buffer(0)
 
 # tree tops
 ttops |> 
-  st_crop(st_bbox(roi)) -> tout
-
-# polygons
-cro |> 
-  filter(treeID %in% ttops$treeID) -> cout
-
-# save output to disk as a shapefile
-tout |> 
-  filter(treeID %in% cout$treeID) |>
+  filter(treeID %in% cro$treeID) |>
   mutate(X = st_coordinates(geometry)[,1], 
          Y = st_coordinates(geometry)[,2]) |>
   st_write(paste0(path_prj, "/segment_output/", site, "_ttops.geojson"), delete_layer = TRUE)
 
-cout |> 
+cro |> 
     st_write(paste0(path_prj, "/segment_output/", site, "_crowns.geojson"), delete_layer = TRUE)
-
-writeRaster(crowns, filename = paste0(path_prj, "/segment_output/", site, "_crown_raster.tif"), overwrite = TRUE)
 ```
 
 ------------------------------------------------------------------------
