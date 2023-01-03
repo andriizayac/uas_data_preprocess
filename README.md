@@ -1,7 +1,7 @@
 ### UAS Data Workflows
 
 ### Authors:
-Andrii Zaiats, Caughlin Lab
+Andrii Zaiats, Valorie Marie, Caughlin Lab
 
 ---
 
@@ -13,7 +13,6 @@ This repository stores the scripts that are used by the lab in pre-processing an
 ### Content:
 - *dem2dtm.Rmd*
 - *image_preprocess.ipynb*
-- *rename_p4m.R*
 - *segment_workflow.R*
 - *chm2segment.Rmd*
-- *chm2segment_cloud.Rmd*
+
