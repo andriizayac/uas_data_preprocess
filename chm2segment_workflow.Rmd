@@ -1,7 +1,7 @@
 ---
 title: "CHM2Segment workflow"
 author: "Andrii Zaiats"
-date: "Last updated: 2022-09-07"
+date: "Last updated: 2023-01-13"
 output: html_document
 ---
 
@@ -13,7 +13,7 @@ knitr::opts_chunk$set(include = TRUE, echo = TRUE, eval = FALSE)
 
 The script goes step by step from the canopy height model to a final product that is a geospatial layer of segmented crowns and a raster mask where a pixel can belong either to a plant or ground. The following code is a test version of the workflow and may undergo changes/improvements.\
 
-**Raster or Cloud-based tree detection:** the script currently includes two parts. Part 1, which goes first, includes all steps to run the segmentation algorithm using a Canopy Height Model raster. The advantage of this approach is that it does not need any point clouds, which is somewhat simpler. Part 2, which is in the end and is currently under development, uses Cloud-based tree detection. The cloud is normalized using DTM and has an advantage of using parallelized algorithms for cloud catalog processing in *lidR* package. Note, only **Step 2** is different between two approaches, the region-growing algorithm in **Step 3** and onward is efficient and can be ran on a full raster without the necessity to parallelize.
+**Raster or Cloud-based tree detection:** the script currently includes only the steps to run the segmentation algorithm using a Canopy Height Model raster as an input. The advantage of this approach is that it does not need any point clouds, which is somewhat simpler. Alternatively, cloud-based tree detection has an advantage of using parallelized algorithms for cloud catalog processing in *lidR* package. The latter is not implemented in this document. Initial trial revealed that small plants are easily confused with point cloud noise, which is not as much of a problem with the CHM.
 
 ##### *Steps in the workflow*:
 
@@ -34,7 +34,7 @@ pkgs <- c("lidR", "sf", "stars", "terra", "tidyverse", "devtools", "mapview", "m
 sapply(pkgs, require, character.only = TRUE, quietly = TRUE)
 
 # specify paths
-path_prj <- "path/to/chm.dtm.pointCloud tiles folder"
+path_prj <- "path/to/project"
 path_out <- paste0(path_prj, "segment_output/")
 
 if(dir.exists(path_out) == FALSE)
@@ -42,7 +42,7 @@ if(dir.exists(path_out) == FALSE)
 
 # data attributes
 site <- ""
-date <- "" # in YYYYMMDD format
+date <- "" # eg in YYYYMMDD format
 prj_crs <- "" # eg wgs84utm11n
 ```
 
@@ -52,7 +52,7 @@ This step, is optional but is highly recommended before processing the full data
 
 ##### Crop the Canopy Height Model to a smaller footprint.
 
-The cropping factor is the degree to which the we want to subset the full dataset. Higher number means that the resulting raster will be smaller.
+The cropping factor is the degree to which the we want to subset the full dataset. A higher number means that the resulting raster will be smaller.
 
 ```{r, message=FALSE, error=FALSE, warning=FALSE}
 tiles <- readLAScatalog(paste0(path_prj, "tiles"))
@@ -65,9 +65,9 @@ chm <- crop( rast(f), extent(ts))
 writeRaster(chm, filename = paste0(path_prj, "chm_test.tif"))
 ```
 
-The result of this code chunk should be a small raster named *chm_test.tif* stored in the project directory.
+The result of this code chunk should be a small raster named *chm_test.tif* stored in the project directory. 
 
-#### 1. Load Canopy Height Model and the _.las_ catalog (denseCloud tiles). Note, the `tiles/` folder needs to contain only the unprocessed tiles as the catalog function reads all _.las_ files in the directory. 
+#### 1. Load Canopy Height Model. Note, the `tiles/` folder needs to contain only the unprocessed tiles as the catalog function reads all _.las_ files in the directory. 
 
 ```{r}
 Test <- 0 # this is where we define whether to use the test dataset.
@@ -75,40 +75,38 @@ Test <- 0 # this is where we define whether to use the test dataset.
 
 if(Test == 1) { 
   ptrn = "chm_test.tif$" 
-  tpath = paste0(path_prj, "test/")
   } else {
   ptrn = "_chm_.*.tif$" 
-  tpath = paste0(path_prj, "tiles/")}
+}
 
 f <- list.files(path_prj, pattern = ptrn, full.names = TRUE)
 chm <- rast(f) |>
   classify(rcl = matrix(c(-Inf, 0, 0, 
                            3, Inf, 3), nc = 3, byrow = TRUE))
-
-ts <- readLAScatalog(paste0(tpath))
 ```
 
 #### 2. Detect tree tops.
 
-The result from the tree detection algorithm is a spatial point layer. The performance of the algorithm depends on three input parameters: $a, b, h_0$.\
-
-2.1 Increasing $a$ will result in less clumping of individuals and it will affect proportionally small and large plants. Really small values will result in about equal clumping of smaller plants close to the ground surface and on top of larger shrubs (*e.g.*, individual branches sticking up may be treated as individual shrubs).\
-2.2 Higher values for $b$ will result in fewer plants detected close to the edge of larger individuals. In other words, while larger individuals should still be detected, smaller plants may be missed only when located closer to larger ones.\
+The result from the tree detection algorithm is a spatial point layer. The performance of the algorithm depends on three input parameters.\
+In the $f(x) = a*tanh(x*b) + c*x$ function, the interpretation of the parameters is the following:  
+2.1 Increasing $a$ will result in less clumped individuals and it will affect proportionally small and large plants. Really small values will result in about equal clumping of smaller plants close to the ground surface and on top of larger shrubs (*e.g.*, individual branches sticking up may be treated as individual shrubs).\
+2.2 Higher values for $b$ will result in fewer plants detected close to the edge of larger individuals. In other words, while larger individuals should still be detected, smaller plants may be missed only when they are located closer to larger ones.\
 2.3 The value for $h_0$ controls the minimum search radius and accounts for the possibility that CHM may contain negative values. Smaller values for $h_0$ will likely result in more plants detected close to the ground surface.\
+2.4 Parameter $c$ mostly affects the detection of large individuals. The term assumes an increase in the search radius given larger plants.\
 
 ```{r, message=FALSE, results='hide'}
 # Allometric function, aka moving window radius
 ws_fn <- function(x) {
-  a <- 2.25; 
-  b <- 0.75; 
+  a <- 1.75
+  b <- 0.25 
   h0 <- 0.25
-  c <- 0.15
+  c <- 0.25
   
   r <- a*tanh(x*b) + c*x
   r[r < h0] <- h0
   return(r)
 }
-ttops <- find_trees(chm, lmf(ws = ws_fn, hmin = .1, shape = "circular")) |> 
+ttops <- find_trees(chm, lmf(ws = ws_fn, hmin = .05, shape = "circular")) |> 
   st_as_sf()
 ```
 
@@ -132,30 +130,32 @@ There are several choices of region-growing algorithms that can perform better o
 
 One choice is `silva2016()` algorithm. The performance of this algorithm depends on two parameters: `max_cr_factor` and `exclusion`.\
 3.1 Based on the `silva2016()` documentation, `max_cr_factor` is the expected maximum width of a shrub given its height. For example, using `0.5` means that we expect that the diameter of a 1m tall shrub is 0.5m. Since sagebrush can be a pretty wide plant at its mature state, values \>1 will indicate that the width can be bigger than the height.\
-3.2 The value of the `exclusion` parameter needs to be between 0 and 1 and it determines to what degree the edges of the plants will be included, or excluded, from the segments. For example, assuming the plant is 2m tall and we choose `exclusion = 0.25`, pixels of the CHM with values below `2 * 0.25 = .5 m` tall will be excluded from the edges of the segment. Similarly, for a plant that is 0.4m tall CHM values below 0.1 m will be excluded. In other words, smaller values will add more pixels to the segments around its edges.
+3.2 The value of the `exclusion` parameter needs to be between 0 and 1 and it determines to what degree the edges of the plants will be included, or excluded, from the segments. For example, assuming the plant is 2m tall and we choose `exclusion = 0.25`, pixels of the CHM with values below `2 * 0.25 = .5 m` tall will be excluded from the edges of the segment. Similarly, for a plant that is 0.4m tall CHM values below 0.1 m will be excluded. In other words, smaller values will add more pixels to the segments around its edges.\
+3.3 A small modification to the `silva2016()` is stored under `utils/silva2016_mv0.R`. This modification adds a correction factor to `max_cr_factor` such that we may assume that smaller plants have different allometry. For example, it may be less likely that a small plant can be twice wide compared to mature plants, in which case we need to reduce the `max_cr_factor` parameter. If not needed, just set `silva2016_mv0(..., f = 1)`, in which case the original algorithm will be implemented.
 
-Another choice is `dalponte2016()` . This algorithm takes four different parameters that will determine how segments will be created. The help page `?lidR::dalponte2016` provides a good explanation of the four parameters.
+Another choice is `dalponte2016()` . This algorithm takes four parameters that will determine how segments will be created. The help page `?lidR::dalponte2016` provides a good explanation of the four parameters.
 
 ```{r}
-# processing las catalogs requires a temp directory
-opt_output_files(ts) <- paste0(tpath, "seg_tile_{ID}")
-
+source("utils/silva2016_mv0.R")
 # segment trees
-algo <- dalponte2016(chm, ttops, th_tree = .15, th_seed = .2, th_cr = .1, max_cr = 150)
+fmcf <- function(x, a = 1, b = 2) {tanh(a + x*b)}
+algo <- silva2016_mv0(chm, ttops, max_cr_factor = 2.5, exclusion = 0.1, f = fmcf)()
 
-tscro <- segment_trees(ts, algorithm = algo, uniqueness = "bitmerge")
-
-cro <- crown_metrics(tscro, func = .stdtreemetrics, geom = "concave", concaveman = c(7,0)) |>
-  select(-Z) |>
+algo |>
+  st_as_stars() |> st_as_sf(as_points = FALSE, merge = TRUE) |>
+  select(-contains("dsm")) |>
   st_join(ttops) |>
-  filter(npoints > 10) |>
-  group_by(treeID.x) |>
-  slice_max(Z) |> ungroup() |>
-  select(-treeID.x) |> rename("treeID" = "treeID.y") 
+  group_by(treeID) |> slice_max(Z) |> 
+  ungroup() -> cro
 
 plot(chm)
 plot(cro$geometry, add = TRUE)
 plot(ttops$geometry, add = TRUE, pch = 19, cex = .5, col = "black")
+
+aa <- st_intersection(plants, st_buffer(cro, 0.1)) |> add_count(treeID)
+plot(aa$geometry, pch = 15, col = "blue", add = TRUE)
+plot(plants$geometry, pch = 18, col = (plants$Ht_gt_25+1), add = TRUE)
+
 ```
 
 #### 4. Export output.
@@ -170,10 +170,10 @@ ttops |>
   filter(treeID %in% cro$treeID) |>
   mutate(X = st_coordinates(geometry)[,1], 
          Y = st_coordinates(geometry)[,2]) |>
-  st_write(paste0(path_prj, "/segment_output/", site, "_ttops.geojson"), delete_layer = TRUE)
+  st_write(paste0(path_prj, "/segment_output/", site, "_ttops_detection.geojson"), delete_layer = TRUE)
 
 cro |> 
-    st_write(paste0(path_prj, "/segment_output/", site, "_crowns.geojson"), delete_layer = TRUE)
+    st_write(paste0(path_prj, "/segment_output/", site, "_crowns_detection.geojson"), delete_layer = TRUE)
 ```
 
 ------------------------------------------------------------------------
