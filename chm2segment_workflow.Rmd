@@ -11,9 +11,9 @@ knitr::opts_chunk$set(include = TRUE, echo = TRUE, eval = FALSE)
 
 #### Canopy Height Model (CHM) to segmented crowns workflow using *lidR* package.
 
-The script goes step by step from the canopy height model to a final product that is a geospatial layer of segmented crowns and a raster mask where a pixel can belong either to a plant or ground. The following code is a test version of the workflow and may undergo changes/improvements.\
+The script goes step by step from the canopy height model to a final product, including a geospatial layer of segmented crowns and a raster mask where a pixel can belong either to a plant or ground. The following code is may undergo changes/improvements.\
 
-**Raster or Cloud-based tree detection:** the script currently includes only the steps to run the segmentation algorithm using a Canopy Height Model raster as an input. The advantage of this approach is that it does not need any point clouds, which is somewhat simpler. Alternatively, cloud-based tree detection has an advantage of using parallelized algorithms for cloud catalog processing in *lidR* package. The latter is not implemented in this document. Initial trial revealed that small plants are easily confused with point cloud noise, which is not as much of a problem with the CHM.
+**Raster or Cloud-based tree detection:** the script currently includes only the steps to run the segmentation algorithm using a Canopy Height Model raster as an input. The advantage of this approach, it does not need any point clouds, which is somewhat simpler. Alternatively, cloud-based tree detection has an advantage of using parallelized algorithms for cloud catalog processing in *lidR* package. The latter is not implemented in this document. Initial trial revealed that small plants are easily confused with point cloud noise, which is not as much of a problem with the CHM.
 
 ##### *Steps in the workflow*:
 
@@ -48,7 +48,7 @@ prj_crs <- "" # eg wgs84utm11n
 
 #### 0. Parameter tuning.
 
-This step, is optional but is highly recommended before processing the full dataset. The algorithms and order of application are the same, but it operates on a small subset of the data (*e.g.*, 20 x 20m) and can be useful to fine-tune input parameters. To run the script on a test dataset, in **Step 1** set `Test = 1`, otherwise set `Test = 0` to run the algorithm on a full dataset. The former will look for a smaller CHM raster generated from code cell below.
+This step is optional but is highly recommended before processing the full dataset. The algorithms and order of application are the same, but it operates on a small subset of the data (*e.g.*, 20 x 20m) and can be useful to fine-tune input parameters. To run the script on a test dataset, in **Step 1** set `Test = 1`, otherwise set `Test = 0` to run the algorithm on a full dataset. The former will look for a smaller CHM raster generated from code cell below. Alternatively, you could extract a smaller raster using a method of your choice and place a file `chm_test.tif` into the `path_prj` folder.
 
 ##### Crop the Canopy Height Model to a smaller footprint.
 
@@ -65,9 +65,9 @@ chm <- crop( rast(f), extent(ts))
 writeRaster(chm, filename = paste0(path_prj, "chm_test.tif"))
 ```
 
-The result of this code chunk should be a small raster named *chm_test.tif* stored in the project directory. 
+The result of this code chunk should be a small raster named *chm_test.tif* stored in the project directory.
 
-#### 1. Load Canopy Height Model. Note, the `tiles/` folder needs to contain only the unprocessed tiles as the catalog function reads all _.las_ files in the directory. 
+#### 1. Load Canopy Height Model. Note, the `tiles/` folder needs to contain only the unprocessed tiles as the catalog function reads all *.las* files in the directory.
 
 ```{r}
 Test <- 0 # this is where we define whether to use the test dataset.
@@ -88,7 +88,7 @@ chm <- rast(f) |>
 #### 2. Detect tree tops.
 
 The result from the tree detection algorithm is a spatial point layer. The performance of the algorithm depends on three input parameters.\
-In the $f(x) = a*tanh(x*b) + c*x$ function, the interpretation of the parameters is the following:  
+In the $f(x) = a*tanh(x*b) + c*x$ function, the interpretation of the parameters is the following:\
 2.1 Increasing $a$ will result in less clumped individuals and it will affect proportionally small and large plants. Really small values will result in about equal clumping of smaller plants close to the ground surface and on top of larger shrubs (*e.g.*, individual branches sticking up may be treated as individual shrubs).\
 2.2 Higher values for $b$ will result in fewer plants detected close to the edge of larger individuals. In other words, while larger individuals should still be detected, smaller plants may be missed only when they are located closer to larger ones.\
 2.3 The value for $h_0$ controls the minimum search radius and accounts for the possibility that CHM may contain negative values. Smaller values for $h_0$ will likely result in more plants detected close to the ground surface.\

@@ -11,13 +11,13 @@ knitr::opts_chunk$set(include = TRUE, echo = TRUE, eval = FALSE)
 
 #### DEM to DTM workflow for SfM dense clouds using R and CloudCompare.
 
-The following code is a test version of the workflow and may undergo changes/improvements. Known issues include: (a) from one step in CloudCompare to the next, the number of tiles may be reduced due to the really tiny tiles representing the edges, or (b) if the following code chunk that calls CloudCompare is ran before the current process finishes in the background. [working on resolution]
+The following code represents a workflow that may undergo changes/improvements. Cautions: (a) from one step in CloudCompare to the next, the number of tiles may be reduced due to the really tiny tiles representing the edges; similar reduction of tile number may be due to too aggressive filtering parameters; (b) the current implementation of CloudCompare's CSF function in CLI may result in the output tiles placed in a different location, - these may need to be located and transferred to the project folder manually; (c) if the following code chunk that calls CloudCompare is ran before the current process finishes in the background.
 
 ##### *Steps in the workflow:*
 
 1.  Split dense point cloud into smaller tiles (as an option, we can choose to process the entire file - details below).
 
-2.  Select a few tiles for test runs and parameter tuning (optional).
+2.  Select a few tiles for test runs and parameter tuning (optional but recommended). It may also be fruitful to use CC's GUI to execute the filtering steps on a test file for faster parameter tuning.
 
 3.  Use CloudCompare (CC) to clean DEM down to "*ground points*" only:
 
@@ -33,7 +33,7 @@ The following code is a test version of the workflow and may undergo changes/imp
 
 4.  Generate DTM raster.
 
-5.  Generate CHM (optionally).
+5.  Generate CHM.
 
 ##### *Required software*
 
@@ -79,7 +79,7 @@ prj_crs <- "" # e.g. wgs84utm11n
 #### 1. Split dense point cloud into smaller tiles.
 
 *The workflow assumes we have a single .las file output from the SfM software. However,\
-- if we have a collection of .laz/.las files that need to be merged first (default WebODM output) before processing or tiling, in the end of the script we can run the merge function first.\
+- if we have a collection of .laz/.las files that need to be merged first (default WebODM output inlcludes multiple small tiles with different extents and densities) before processing or tiling, we can run the merge function first (see the end of the script).\
 - If we already have a collection of tiles in a .las format and want to process them separately, we need move them to the **tiles** folder and carry on to **Step 3***.
 
 We can adjust the tile size of tiles using the `opt_chunk_size()` function as necessary. In case our input *.las* file is small enough to be processed as a single file, we can just specify the tile size really large (beyond the footprint of the dense cloud) and proceed with the workflow (in this case we can skip **Step 2**). On the other hand, if the file is large, this step may take a few minutes to tile up the main dense cloud, and the rest of the code will process each tile separately. For UAS datasets \~1 cm resolution, a tile size of 10 m is an adequate starting point.
@@ -106,7 +106,7 @@ plan(sequential) # close parallel setup
 
 #### 2. Select a few tiles for test runs and parameter tuning.
 
-We can skip this step if we know the parameters for CloudCompare filtering. Otherwise, this step may be handy and save time if we have a large dataset at hand. The `tile_size` should be same as in **Step 1**. To run the workflow on a subset of tiles, in ***Step 3.1*** we need to specify `Test = 1` in the beginning of the chunk,  which will contain a subset of tiles we select here. Otherwise, we set `Test = 0`, to run the steps on a full dataset. 
+We can skip this step if we know the parameters for CloudCompare filtering. Otherwise, this step may be handy and save time if we have a large dataset at hand. The `tile_size` should be same as in **Step 1**. To run the workflow on a subset of tiles, in ***Step 3.1*** we need to specify `Test = 1` in the beginning of the chunk, which will contain a subset of tiles we select here. Otherwise, we set `Test = 0`, to run the steps on a full dataset.
 
 ```{r, message=FALSE}
 tile_size <- 10
@@ -124,6 +124,7 @@ newts <- catalog_retile(ts)
 *For most of Step 3 the script runs CloudCompare commands via Command Line Interface (CLI).* *Note: while the script in each chunk may indicate that the program has finished after we ran it, it may actually still run in the background for a while in CloudCompare. Running the next step before the previous has finished may cause the loss of tiles. One way to keep an eye on the actual progress can be to open the project folder and check the times each chunk was created or modified, which should be consistent for all tiles.*
 
 ##### 3.1: Create a path for *CloudCompare* command line interface.
+
 ```{r}
 Test = 1
 
@@ -138,7 +139,7 @@ wdir <- gsub("/", "\\\\", path) # specify where the tiles are
 
 ##### 3.2: Apply CSF for initial separation of Ground and Vegetation, *e.g.,* [-CSF -SCENES SLOPE -CLOTH_RESOLUTION 0.1 -MAX_ITERATION 500 -CLASS_THRESHOLD 0.2 -EXPORT_GROUND]
 
-*note: the CloudCompare CSF function is new and may be unstable when ran from CLI - the output may be placed in unexpected directory on a hard drive. The following chunk includes a line to search for the output and place it back into the project working directory, but providing an approximate path where files are stored, `search_dir` will speed it up. It'd be best to provide a search directory, if the search runs on the entire hard drive it will take a long time and may accidentally grab unrelated files.*
+*note: the CloudCompare CSF function is new and may be unstable when ran from CLI - the output may be placed in unexpected directory on a hard drive. The following chunk includes a line to search for the output and place it back into the project working directory, but providing an approximate path where files are stored, `search_dir` will speed it up. It'd be best to provide a search directory, if the search runs on the entire hard drive it will take a long time and may accidentally grab unrelated files. Alternatively, feel free to out-comment the search-relocation code lines and transfer the files manually.*
 
 This step runs a command to separate ground from vegetation objects. The objective of this step is to coarsely split vegetation from ground point, erring on the conservative side as the subsequent steps will chip away vegetation from ground more carefully. CSF (Cloth Simulation Filter) is set up to run with a "SLOPE" setting, which allows the algorithm to better separate vegetation from ground on complex topography, but should be changed to 'FLAT' on even terrain. Two other arguments that can be modified to adjust the output is "CLOTH RESOLUTION" and "CLASS THRESHOLD", best way would be to experiment with different values in CloudCompare based on a point cloud at hand.
 
@@ -163,7 +164,7 @@ lfnew <- paste0(path, sapply(strsplit(lf, "/"), function(x) { x[length(x)]}))
 file.rename(lf, lfnew)
 ```
 
-##### 3.3: Denoise again using SOR filter, *e.g.,* [-SOR 100 2].
+##### 3.3: Denoise using SOR filter, *e.g.,* [-SOR 100 2].
 
 This step runs a command to clean the point cloud from outliers. SOR (Statistical Outlier Filter) takes in two arguments: (1) number of neighbors (specifies a radius to search for outliers), and (2) the number of standard deviations as a measure distance from the mean to create a threshold for point removal. Larger values in (1) will take longer to run and will consider larger neighborhoods to determine points that represent noise, and smaller values in (2) will set a more aggressive threshold.
 
@@ -247,7 +248,9 @@ unlink(paste0(path, "tmp"), recursive = TRUE)
 
 ##### 
 
-> If we're running the script on a subset of tiles, this may be a good stopping point. Explore how the output surface looks and whether the filtered point cloud does not have any excessively large gaps that may result in concave/convex interpolation. If the output looks fine, we can go back to **Step 3.1** and change the path to `path_tiles` that includes the full dataset.
+> If we're running the script on a subset of tiles, this may be a good stopping point. Explore how the output surface looks and whether the filtered point cloud does not have any excessively large gaps that may result in concave/convex interpolation (if Poisson interpolation is used). If the output looks fine, we can go back to **Step 3.1** and change the path to `path_tiles` that includes the full dataset.
+>
+> Update: triangulation is more robust to large gaps in the remaining ground point cloud than Poisson, it's less sensitive to curvatures along plant margins that failed to be filtered out, and the resultant triangulated surface can be smoothed out to remove sharp elevation changes in DTM.
 
 #### 4. Generate DTM raster.
 
