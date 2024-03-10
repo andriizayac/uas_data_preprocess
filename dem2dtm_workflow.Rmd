@@ -260,7 +260,7 @@ The final steps to produce a DTM and subsequently use it to calculate CHM will u
 
 -   Interpolates the gaps using Triangular Irregular Network (TIN) algorithm.
 
--   Discards ground points that are more than 5 cm below and 2 cm above the interpolated surface.
+-   Discards ground points that are more than 5 cm below and 5 cm above the interpolated surface.
 
 -   Re-create the surface using the same TIN algorithm.
 
